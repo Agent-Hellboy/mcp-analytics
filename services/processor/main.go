@@ -1,0 +1,225 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+)
+
+type eventPayload struct {
+	Timestamp string          `json:"timestamp"`
+	Source    string          `json:"source"`
+	EventType string          `json:"event_type"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+func main() {
+	brokers := strings.Split(envOr("KAFKA_BROKERS", "kafka:9092"), ",")
+	topic := envOr("KAFKA_TOPIC", "mcp.events")
+	groupID := envOr("KAFKA_GROUP", "mcp-analytics-processor")
+	metricsPort := envOr("METRICS_PORT", "9092")
+
+	clickhouseAddr := envOr("CLICKHOUSE_ADDR", "clickhouse:9000")
+	dbName := envOr("CLICKHOUSE_DB", "mcp")
+
+	batchSize := envInt("BATCH_SIZE", 500)
+	flushInterval := envDuration("FLUSH_INTERVAL", 2*time.Second)
+
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr:        []string{clickhouseAddr},
+		Auth:        clickhouse.Auth{Database: dbName},
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		log.Fatalf("failed to connect to clickhouse: %v", err)
+	}
+
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  brokers,
+		Topic:    topic,
+		GroupID:  groupID,
+		MinBytes: 1,
+		MaxBytes: 10e6,
+	})
+	defer reader.Close()
+
+	go func() {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(":"+metricsPort, metricsMux); err != nil {
+			log.Printf("metrics server stopped: %v", err)
+		}
+	}()
+
+	shutdown, err := initTracer("mcp-analytics-processor")
+	if err != nil {
+		log.Printf("otel init failed: %v", err)
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = shutdown(ctx)
+		}()
+	}
+
+	log.Printf("mcp-analytics-processor started")
+	ctx := context.Background()
+	tracer := otel.Tracer("mcp-analytics-processor")
+
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	batch := make([]eventPayload, 0, batchSize)
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		flushCtx, span := tracer.Start(ctx, "clickhouse.insert_batch")
+		span.SetAttributes(attribute.Int("batch.size", len(batch)))
+		if err := insertBatch(flushCtx, conn, dbName, batch); err != nil {
+			log.Printf("insert failed: %v", err)
+			span.RecordError(err)
+			span.End()
+			return
+		}
+		span.End()
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			flush()
+		default:
+			msg, err := reader.ReadMessage(ctx)
+			if err != nil {
+				log.Printf("read failed: %v", err)
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+
+		_, span := tracer.Start(ctx, "kafka.consume")
+			span.SetAttributes(
+				attribute.String("kafka.topic", msg.Topic),
+				attribute.Int("kafka.partition", msg.Partition),
+				attribute.Int64("kafka.offset", msg.Offset),
+			)
+
+			var payload eventPayload
+			if err := json.Unmarshal(msg.Value, &payload); err != nil {
+				log.Printf("invalid message: %v", err)
+				span.RecordError(err)
+				span.End()
+				continue
+			}
+
+			if payload.Timestamp == "" {
+				payload.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+			}
+
+			batch = append(batch, payload)
+			span.End()
+			if len(batch) >= batchSize {
+				flush()
+			}
+		}
+	}
+}
+
+func initTracer(serviceName string) (func(context.Context) error, error) {
+	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
+		serviceName = envName
+	}
+	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if endpoint == "" {
+		return func(context.Context) error { return nil }, nil
+	}
+
+	exporter, err := otlptracehttp.New(context.Background(),
+		otlptracehttp.WithEndpoint(strings.TrimPrefix(endpoint, "http://")),
+		otlptracehttp.WithInsecure(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(semconv.ServiceName(serviceName)),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(provider)
+	return provider.Shutdown, nil
+}
+
+func insertBatch(ctx context.Context, conn clickhouse.Conn, dbName string, batch []eventPayload) error {
+	insert, err := conn.PrepareBatch(ctx, "INSERT INTO "+dbName+".events (timestamp, source, event_type, payload)")
+	if err != nil {
+		return err
+	}
+
+	for _, event := range batch {
+		ts, err := time.Parse(time.RFC3339Nano, event.Timestamp)
+		if err != nil {
+			ts = time.Now().UTC()
+		}
+		if err := insert.Append(ts, event.Source, event.EventType, string(event.Payload)); err != nil {
+			return err
+		}
+	}
+
+	return insert.Send()
+}
+
+func envOr(key, fallback string) string {
+	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+		return val
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	val, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return val
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	val, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return val
+}

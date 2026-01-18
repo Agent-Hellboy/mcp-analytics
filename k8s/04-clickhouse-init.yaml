@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: clickhouse-init
+  namespace: mcp-analytics
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: clickhouse/clickhouse-server:23.8
+          envFrom:
+            - configMapRef:
+                name: mcp-analytics-config
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              clickhouse-client --host=clickhouse --query "CREATE DATABASE IF NOT EXISTS ${CLICKHOUSE_DB}";
+              clickhouse-client --host=clickhouse --query "CREATE TABLE IF NOT EXISTS ${CLICKHOUSE_DB}.events (timestamp DateTime64(3), source String, event_type String, payload String) ENGINE = MergeTree ORDER BY timestamp";
