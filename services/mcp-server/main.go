@@ -164,6 +164,9 @@ func (s *server) upperTool(ctx context.Context, _ *mcp.CallToolRequest, args *up
 }
 
 func (s *server) readResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	if req == nil || req.Params == nil || strings.TrimSpace(req.Params.URI) == "" {
+		return nil, fmt.Errorf("invalid request")
+	}
 	u, err := url.Parse(req.Params.URI)
 	if err != nil {
 		return nil, err

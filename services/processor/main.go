@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,9 @@ func main() {
 
 	clickhouseAddr := envOr("CLICKHOUSE_ADDR", "clickhouse:9000")
 	dbName := envOr("CLICKHOUSE_DB", "mcp")
+	if err := validateDBName(dbName); err != nil {
+		log.Fatalf("invalid CLICKHOUSE_DB: %v", err)
+	}
 
 	batchSize := envInt("BATCH_SIZE", 500)
 	flushInterval := envDuration("FLUSH_INTERVAL", 2*time.Second)
@@ -256,6 +261,20 @@ func boolEnv(key string) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func validateDBName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty")
+	}
+	matched, err := regexp.MatchString(`^[A-Za-z_][A-Za-z0-9_]*$`, name)
+	if err != nil {
+		return err
+	}
+	if !matched {
+		return fmt.Errorf("must match ^[A-Za-z_][A-Za-z0-9_]*$")
+	}
+	return nil
 }
 
 func envInt(key string, fallback int) int {
