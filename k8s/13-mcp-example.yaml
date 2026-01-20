@@ -26,10 +26,19 @@ spec:
       labels:
         app: mcp-example-server
     spec:
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: mcp-example-server
           image: mcp-analytics-mcp-server:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8090
           env:
@@ -49,9 +58,22 @@ spec:
                 configMapKeyRef:
                   name: mcp-analytics-config
                   key: OTEL_EXPORTER_OTLP_ENDPOINT
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           readinessProbe:
             httpGet:
               path: /health
               port: 8090
             initialDelaySeconds: 5
             periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 15
+            periodSeconds: 20

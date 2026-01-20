@@ -98,6 +98,7 @@ wait_http() {
 wait_http "http://127.0.0.1:${GATEWAY_PORT}/api/events?limit=1" "x-api-key: ${API_KEY}"
 wait_http "http://127.0.0.1:${PROMETHEUS_PORT}/api/v1/status/buildinfo" ""
 wait_http "http://127.0.0.1:${TEMPO_PORT}/ready" ""
+wait_http "http://127.0.0.1:${LOKI_PORT}/ready" ""
 wait_http "http://127.0.0.1:${LOKI_PORT}/loki/api/v1/status/buildinfo" ""
 
 echo "ingest: skipped (using MCP traffic only)"
@@ -221,7 +222,7 @@ prom_port = os.environ.get("PROMETHEUS_PORT", "9090")
 tempo_port = os.environ.get("TEMPO_PORT", "3200")
 loki_port = os.environ.get("LOKI_PORT", "3100")
 
-def get_json(url, headers=None, retries=3):
+def get_json(url, headers=None, retries=3, delay=1):
     last = None
     for _ in range(retries):
         try:
@@ -229,7 +230,7 @@ def get_json(url, headers=None, retries=3):
             return json.loads(urllib.request.urlopen(req).read().decode())
         except Exception as exc:
             last = exc
-            time.sleep(1)
+            time.sleep(delay)
     raise last
 
 rows = []
@@ -300,9 +301,26 @@ try:
         "end": str(end_ns),
     })
     url = f"http://127.0.0.1:{loki_port}/loki/api/v1/query_range?{params}"
-    data = get_json(url, retries=6)
+    data = get_json(url, retries=60, delay=2)
     streams = data.get("data", {}).get("result", [])
     rows.append(("logs.loki_streams", str(len(streams))))
+    total_entries = sum(len(s.get("values", [])) for s in streams)
+    rows.append(("logs.loki_entries", str(total_entries)))
+    if streams:
+        labels = streams[0].get("stream", {})
+        filename = os.path.basename(labels.get("filename", ""))
+        label_bits = []
+        if labels.get("job"):
+            label_bits.append(f"job={labels.get('job')}")
+        if labels.get("namespace"):
+            label_bits.append(f"namespace={labels.get('namespace')}")
+        if filename:
+            label_bits.append(f"file={filename}")
+        if label_bits:
+            rows.append(("logs.loki_sample_stream", ",".join(label_bits)))
+        values = streams[0].get("values", [])
+        if values:
+            rows.append(("logs.loki_sample_line", values[-1][1]))
 except Exception as exc:
     rows.append(("logs.error", str(exc)))
 

@@ -29,10 +29,19 @@ spec:
       labels:
         app: mcp-analytics-ingest
     spec:
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: ingest
           image: mcp-analytics-ingest:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8081
             - containerPort: 9091
@@ -53,9 +62,22 @@ spec:
                   key: API_KEYS
             - name: OTEL_SERVICE_NAME
               value: mcp-analytics-ingest
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
           readinessProbe:
             httpGet:
               path: /health
               port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20

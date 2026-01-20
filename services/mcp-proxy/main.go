@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -27,6 +31,15 @@ type analyticsEvent struct {
 	Payload   map[string]any `json:"payload"`
 }
 
+type rpcRequest struct {
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
+}
+
+type toolParams struct {
+	Name string `json:"name"`
+}
+
 type proxyServer struct {
 	proxy        *httputil.ReverseProxy
 	analyticsURL string
@@ -41,6 +54,8 @@ type statusRecorder struct {
 	status int
 	bytes  int
 }
+
+const maxRPCBodyBytes = 1 << 20
 
 func main() {
 	port := envOr("PORT", "8091")
@@ -99,6 +114,8 @@ func main() {
 func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+	originalPath := r.URL.Path
+	rpcMethod, toolName := extractRPCInfo(r)
 
 	if s.stripPrefix != "" && strings.HasPrefix(r.URL.Path, s.stripPrefix) {
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, s.stripPrefix)
@@ -112,12 +129,18 @@ func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if s.analyticsURL != "" {
 		payload := map[string]any{
 			"method":     r.Method,
-			"path":       r.URL.Path,
+			"path":       originalPath,
 			"query":      r.URL.RawQuery,
 			"status":     recorder.status,
 			"latency_ms": time.Since(start).Milliseconds(),
 			"bytes_in":   maxInt64(r.ContentLength, 0),
 			"bytes_out":  recorder.bytes,
+		}
+		if rpcMethod != "" {
+			payload["rpc_method"] = rpcMethod
+		}
+		if toolName != "" {
+			payload["tool_name"] = toolName
 		}
 
 		event := analyticsEvent{
@@ -163,6 +186,62 @@ func (r *statusRecorder) Write(data []byte) (int, error) {
 	n, err := r.ResponseWriter.Write(data)
 	r.bytes += n
 	return n, err
+}
+
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("hijacker not supported")
+	}
+	return hijacker.Hijack()
+}
+
+func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	if pusher, ok := r.ResponseWriter.(http.Pusher); ok {
+		return pusher.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+func extractRPCInfo(r *http.Request) (string, string) {
+	if r.Method != http.MethodPost {
+		return "", ""
+	}
+	contentType := r.Header.Get("content-type")
+	if contentType != "" && !strings.Contains(contentType, "application/json") {
+		return "", ""
+	}
+	if r.Body == nil || r.ContentLength == 0 || r.ContentLength == -1 || r.ContentLength > maxRPCBodyBytes {
+		return "", ""
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
+		return "", ""
+	}
+	r.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	var req rpcRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", ""
+	}
+
+	var toolName string
+	if len(req.Params) > 0 {
+		var params toolParams
+		if err := json.Unmarshal(req.Params, &params); err == nil {
+			toolName = params.Name
+		}
+	}
+
+	return req.Method, toolName
 }
 
 func envOr(key, fallback string) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -107,37 +108,7 @@ func main() {
 	}
 }
 
-func initTracer(serviceName string) (func(context.Context) error, error) {
-	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
-		serviceName = envName
-	}
-	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-	if endpoint == "" {
-		return func(context.Context) error { return nil }, nil
-	}
-
-	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(strings.TrimPrefix(endpoint, "http://")),
-		otlptracehttp.WithInsecure(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	res, err := resource.New(context.Background(),
-		resource.WithAttributes(semconv.ServiceName(serviceName)),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-	)
-	otel.SetTracerProvider(provider)
-	return provider.Shutdown, nil
-}
+const maxBodySize = 1 << 20 // 1MB
 
 func (s *ingestServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -145,6 +116,7 @@ func (s *ingestServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var payload eventPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_json"})
@@ -250,6 +222,45 @@ func logRequests(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
 	})
+}
+
+func initTracer(serviceName string) (func(context.Context) error, error) {
+	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
+		serviceName = envName
+	}
+	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if endpoint == "" {
+		return func(context.Context) error { return nil }, nil
+	}
+
+	// Parse and extract host:port if a full URL is provided
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		if u, err := url.Parse(endpoint); err == nil {
+			endpoint = u.Host
+		}
+	}
+
+	exporter, err := otlptracehttp.New(context.Background(),
+		otlptracehttp.WithEndpoint(endpoint),
+		otlptracehttp.WithInsecure(), // TODO: make configurable for TLS
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := resource.New(context.Background(),
+		resource.WithAttributes(semconv.ServiceName(serviceName)),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(provider)
+	return provider.Shutdown, nil
 }
 
 func envOr(key, fallback string) string {

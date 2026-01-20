@@ -36,3 +36,8 @@ SMOKE_TEST_REPORT.md
 
 .gocache/
 .gomodcache/
+
+explore/
+
+# Kubernetes secrets (contains real secrets)
+k8s/02-secrets.yaml

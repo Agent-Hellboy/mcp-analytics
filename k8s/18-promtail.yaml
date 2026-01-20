@@ -58,6 +58,13 @@ data:
             separator: /
             target_label: __path__
             replacement: /var/log/pods/*$1/*.log
+      - job_name: static-pods
+        static_configs:
+          - targets: ["localhost"]
+            labels:
+              job: static-pods
+              namespace: mcp-analytics
+              __path__: /var/log/pods/mcp-analytics_*/*/*.log
 ---
 apiVersion: apps/v1
 kind: DaemonSet

@@ -61,6 +61,10 @@ func main() {
 	go func() {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", promhttp.Handler())
+		metricsMux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		})
 		if err := http.ListenAndServe(":"+metricsPort, metricsMux); err != nil {
 			log.Printf("metrics server stopped: %v", err)
 		}

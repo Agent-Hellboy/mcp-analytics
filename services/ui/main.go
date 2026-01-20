@@ -6,6 +6,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,9 +102,16 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 		return func(context.Context) error { return nil }, nil
 	}
 
+	// Parse and extract host:port if a full URL is provided
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		if u, err := url.Parse(endpoint); err == nil {
+			endpoint = u.Host
+		}
+	}
+
 	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(strings.TrimPrefix(endpoint, "http://")),
-		otlptracehttp.WithInsecure(),
+		otlptracehttp.WithEndpoint(endpoint),
+		otlptracehttp.WithInsecure(), // TODO: make configurable for TLS
 	)
 	if err != nil {
 		return nil, err

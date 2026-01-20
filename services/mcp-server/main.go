@@ -141,7 +141,7 @@ func (s *server) addTool(_ context.Context, _ *mcp.CallToolRequest, args *addArg
 	})
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{Text: fmt.Sprintf("%.0f", sum)},
+			&mcp.TextContent{Text: fmt.Sprintf("%g", sum)},
 		},
 	}, nil, nil
 }
@@ -185,8 +185,10 @@ func (s *server) readResource(_ context.Context, req *mcp.ReadResourceRequest) (
 
 func (s *server) getPrompt(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	text := ""
-	if req != nil {
-		text = req.Params.Arguments["text"]
+	if req != nil && req.Params != nil && req.Params.Arguments != nil {
+		if val, ok := req.Params.Arguments["text"]; ok {
+			text = val
+		}
 	}
 	summary := text
 	if len(summary) > 80 {
@@ -261,9 +263,16 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 		return func(context.Context) error { return nil }, nil
 	}
 
+	// Parse and extract host:port if a full URL is provided
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		if u, err := url.Parse(endpoint); err == nil {
+			endpoint = u.Host
+		}
+	}
+
 	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(strings.TrimPrefix(endpoint, "http://")),
-		otlptracehttp.WithInsecure(),
+		otlptracehttp.WithEndpoint(endpoint),
+		otlptracehttp.WithInsecure(), // TODO: make configurable for TLS
 	)
 	if err != nil {
 		return nil, err

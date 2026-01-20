@@ -51,11 +51,12 @@ spec:
       targetPort: 9092
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: kafka
   namespace: mcp-analytics
 spec:
+  serviceName: kafka
   replicas: 1
   selector:
     matchLabels:
@@ -101,6 +102,11 @@ spec:
           volumeMounts:
             - name: kafka-data
               mountPath: /var/lib/kafka/data
-      volumes:
-        - name: kafka-data
-          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi

@@ -26,16 +26,32 @@ spec:
       labels:
         app: mcp-example-sidecar
     spec:
+      securityContext:
+        runAsNonRoot: true
       containers:
         - name: mcp-server
           image: mcp-analytics-mcp-server:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           env:
             - name: PORT
               value: "8090"
         - name: mcp-proxy
           image: mcp-analytics-mcp-proxy:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8091
           env:
