@@ -27,10 +27,14 @@ jobs:
       - name: Validate manifests
         run: |
           set -euo pipefail
-          curl -sSL -o /usr/local/bin/kubectl https://storage.googleapis.com/kubernetes-release/release/v1.29.0/bin/linux/amd64/kubectl
-          curl -sSL -o /tmp/kubectl.sha256 https://storage.googleapis.com/kubernetes-release/release/v1.29.0/bin/linux/amd64/kubectl.sha256
+          curl -sSL -o /usr/local/bin/kubectl https://storage.googleapis.com/kubernetes-release/release/v1.34.0/bin/linux/amd64/kubectl
+          curl -sSL -o /tmp/kubectl.sha256 https://storage.googleapis.com/kubernetes-release/release/v1.34.0/bin/linux/amd64/kubectl.sha256
           echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum --check
           chmod +x /usr/local/bin/kubectl
           for file in k8s/*.yaml; do
-            kubectl apply --dry-run=client -f "$file" >/dev/null
+            kubectl apply --dry-run=client --validate=false -f "$file" >/dev/null
           done
+          curl -sSL -o /tmp/kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          chmod +x /tmp/kubeconform
+          /tmp/kubeconform -kubernetes-version 1.34.0 -summary -strict k8s/*.yaml
