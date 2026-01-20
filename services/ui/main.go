@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,13 +87,6 @@ func logRequests(next http.Handler) http.Handler {
 	})
 }
 
-func envOr(key, fallback string) string {
-	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
-		return val
-	}
-	return fallback
-}
-
 func initTracer(serviceName string) (func(context.Context) error, error) {
 	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
 		serviceName = envName
@@ -102,19 +96,7 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 		return func(context.Context) error { return nil }, nil
 	}
 
-	var opts []otlptracehttp.Option
-	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
-		opts = append(opts, otlptracehttp.WithEndpoint(u.Host))
-		if u.Path != "" {
-			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
-		}
-		if u.Scheme == "http" {
-			opts = append(opts, otlptracehttp.WithInsecure())
-		}
-	} else {
-		opts = append(opts, otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithInsecure())
-	}
-
+	opts := otlpTraceOptions(endpoint)
 	exporter, err := otlptracehttp.New(context.Background(), opts...)
 	if err != nil {
 		return nil, err
@@ -133,4 +115,50 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	)
 	otel.SetTracerProvider(provider)
 	return provider.Shutdown, nil
+}
+
+func envOr(key, fallback string) string {
+	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+		return val
+	}
+	return fallback
+}
+
+func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
+	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
+	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
+		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
+		if u.Path != "" {
+			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
+		}
+		if insecureSet {
+			if insecure {
+				opts = append(opts, otlptracehttp.WithInsecure())
+			}
+			return opts
+		}
+		if u.Scheme == "http" {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		return opts
+	}
+
+	opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint)}
+	if insecureSet {
+		if insecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		return opts
+	}
+	return append(opts, otlptracehttp.WithInsecure())
+}
+
+func boolEnv(key string) (bool, bool) {
+	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+		parsed, err := strconv.ParseBool(val)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return false, false
 }

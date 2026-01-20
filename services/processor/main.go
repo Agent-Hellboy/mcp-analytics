@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -106,18 +107,34 @@ func main() {
 		batch = batch[:0]
 	}
 
+	msgChan := make(chan kafka.Message, 100)
+	errChan := make(chan error, 1)
+	go func() {
+		for {
+			msg, err := reader.ReadMessage(ctx)
+			if err != nil {
+				select {
+				case errChan <- err:
+				default:
+				}
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			select {
+			case msgChan <- msg:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case <-ticker.C:
 			flush()
-		default:
-			msg, err := reader.ReadMessage(ctx)
-			if err != nil {
-				log.Printf("read failed: %v", err)
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-
+		case err := <-errChan:
+			log.Printf("read failed: %v", err)
+		case msg := <-msgChan:
 			_, span := tracer.Start(ctx, "kafka.consume")
 			span.SetAttributes(
 				attribute.String("kafka.topic", msg.Topic),
@@ -155,10 +172,8 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 		return func(context.Context) error { return nil }, nil
 	}
 
-	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(strings.TrimPrefix(endpoint, "http://")),
-		otlptracehttp.WithInsecure(),
-	)
+	opts := otlpTraceOptions(endpoint)
+	exporter, err := otlptracehttp.New(context.Background(), opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +191,35 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	)
 	otel.SetTracerProvider(provider)
 	return provider.Shutdown, nil
+}
+
+func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
+	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
+	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
+		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
+		if u.Path != "" {
+			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
+		}
+		if insecureSet {
+			if insecure {
+				opts = append(opts, otlptracehttp.WithInsecure())
+			}
+			return opts
+		}
+		if u.Scheme == "http" {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		return opts
+	}
+
+	opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint)}
+	if insecureSet {
+		if insecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		return opts
+	}
+	return append(opts, otlptracehttp.WithInsecure())
 }
 
 func insertBatch(ctx context.Context, conn clickhouse.Conn, dbName string, batch []eventPayload) error {
@@ -202,6 +246,16 @@ func envOr(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+func boolEnv(key string) (bool, bool) {
+	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+		parsed, err := strconv.ParseBool(val)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return false, false
 }
 
 func envInt(key string, fallback int) int {

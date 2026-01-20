@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -266,17 +267,8 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 		return func(context.Context) error { return nil }, nil
 	}
 
-	// Parse and extract host:port if a full URL is provided
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		if u, err := url.Parse(endpoint); err == nil {
-			endpoint = u.Host
-		}
-	}
-
-	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(endpoint),
-		otlptracehttp.WithInsecure(), // TODO: make configurable for TLS
-	)
+	opts := otlpTraceOptions(endpoint)
+	exporter, err := otlptracehttp.New(context.Background(), opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -294,4 +286,43 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	)
 	otel.SetTracerProvider(provider)
 	return provider.Shutdown, nil
+}
+
+func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
+	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
+	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
+		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
+		if u.Path != "" {
+			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
+		}
+		if insecureSet {
+			if insecure {
+				opts = append(opts, otlptracehttp.WithInsecure())
+			}
+			return opts
+		}
+		if u.Scheme == "http" {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		return opts
+	}
+
+	opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint)}
+	if insecureSet {
+		if insecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		return opts
+	}
+	return append(opts, otlptracehttp.WithInsecure())
+}
+
+func boolEnv(key string) (bool, bool) {
+	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+		parsed, err := strconv.ParseBool(val)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return false, false
 }
