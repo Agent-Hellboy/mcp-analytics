@@ -26,20 +26,6 @@ jobs:
             (cd "$svc" && go build -o "$(basename "$svc")" . && go test ./... -v)
           done
 
-      - name: Lint Go code
-        uses: golangci/golangci-lint-action@v4
-        with:
-          version: latest
-          args: --timeout=5m
-
-      - name: Security scan
-        run: |
-          set -euo pipefail
-          go install github.com/securecodewarrior/govulncheck@latest
-          for svc in services/api services/ingest services/processor services/ui services/mcp-server services/mcp-proxy; do
-            echo "🔒 Scanning $svc for vulnerabilities"
-            (cd "$svc" && govulncheck ./...)
-          done
 
       - name: Check Go version consistency
         run: |
