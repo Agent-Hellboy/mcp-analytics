@@ -118,7 +118,7 @@ func main() {
 				continue
 			}
 
-		_, span := tracer.Start(ctx, "kafka.consume")
+			_, span := tracer.Start(ctx, "kafka.consume")
 			span.SetAttributes(
 				attribute.String("kafka.topic", msg.Topic),
 				attribute.Int("kafka.partition", msg.Partition),

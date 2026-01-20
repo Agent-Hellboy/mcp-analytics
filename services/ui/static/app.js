@@ -18,6 +18,17 @@ function formatPayload(payload) {
   }
 }
 
+function renderEmpty(message) {
+  eventsBody.textContent = "";
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+  cell.colSpan = 4;
+  cell.className = "empty";
+  cell.textContent = message;
+  row.appendChild(cell);
+  eventsBody.appendChild(row);
+}
+
 async function fetchJSON(path) {
   const headers = {};
   if (window.MCP_API_KEY) {
@@ -50,23 +61,38 @@ async function refresh() {
     }
 
     if (events.length === 0) {
-      eventsBody.innerHTML = '<tr><td colspan="4" class="empty">No data yet.</td></tr>';
+      renderEmpty("No data yet.");
       return;
     }
 
-    eventsBody.innerHTML = events
-      .map((event) => {
-        return `
-          <tr>
-            <td>${new Date(event.timestamp).toLocaleString()}</td>
-            <td>${event.source || "-"}</td>
-            <td>${event.event_type || "-"}</td>
-            <td><pre>${formatPayload(event.payload)}</pre></td>
-          </tr>`;
-      })
-      .join("");
+    eventsBody.textContent = "";
+    const fragment = document.createDocumentFragment();
+    events.forEach((event) => {
+      const row = document.createElement("tr");
+
+      const timestampCell = document.createElement("td");
+      timestampCell.textContent = new Date(event.timestamp).toLocaleString();
+      row.appendChild(timestampCell);
+
+      const sourceCell = document.createElement("td");
+      sourceCell.textContent = event.source || "-";
+      row.appendChild(sourceCell);
+
+      const typeCell = document.createElement("td");
+      typeCell.textContent = event.event_type || "-";
+      row.appendChild(typeCell);
+
+      const payloadCell = document.createElement("td");
+      const payloadPre = document.createElement("pre");
+      payloadPre.textContent = formatPayload(event.payload);
+      payloadCell.appendChild(payloadPre);
+      row.appendChild(payloadCell);
+
+      fragment.appendChild(row);
+    });
+    eventsBody.appendChild(fragment);
   } catch (err) {
-    eventsBody.innerHTML = '<tr><td colspan="4" class="empty">Unable to load events.</td></tr>';
+    renderEmpty("Unable to load events.");
   }
 }
 

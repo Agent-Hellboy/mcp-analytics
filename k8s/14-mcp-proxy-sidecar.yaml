@@ -28,6 +28,8 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mcp-server
           image: mcp-analytics-mcp-server:latest
@@ -36,6 +38,8 @@ spec:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
             readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
               drop:
                 - ALL
@@ -49,6 +53,8 @@ spec:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
             readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
               drop:
                 - ALL

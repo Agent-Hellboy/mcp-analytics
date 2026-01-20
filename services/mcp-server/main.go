@@ -115,11 +115,11 @@ func main() {
 	}
 }
 
-func (s *server) echoTool(_ context.Context, _ *mcp.CallToolRequest, args *echoArgs) (*mcp.CallToolResult, any, error) {
+func (s *server) echoTool(ctx context.Context, _ *mcp.CallToolRequest, args *echoArgs) (*mcp.CallToolResult, any, error) {
 	if args == nil {
 		args = &echoArgs{}
 	}
-	s.emitAnalyticsEvent("tool.call", map[string]any{
+	s.emitAnalyticsEvent(ctx, "tool.call", map[string]any{
 		"tool":  "echo",
 		"input": map[string]any{"message": args.Message},
 	})
@@ -130,12 +130,12 @@ func (s *server) echoTool(_ context.Context, _ *mcp.CallToolRequest, args *echoA
 	}, nil, nil
 }
 
-func (s *server) addTool(_ context.Context, _ *mcp.CallToolRequest, args *addArgs) (*mcp.CallToolResult, any, error) {
+func (s *server) addTool(ctx context.Context, _ *mcp.CallToolRequest, args *addArgs) (*mcp.CallToolResult, any, error) {
 	if args == nil {
 		args = &addArgs{}
 	}
 	sum := args.A + args.B
-	s.emitAnalyticsEvent("tool.call", map[string]any{
+	s.emitAnalyticsEvent(ctx, "tool.call", map[string]any{
 		"tool":  "add",
 		"input": map[string]any{"a": args.A, "b": args.B},
 	})
@@ -146,12 +146,12 @@ func (s *server) addTool(_ context.Context, _ *mcp.CallToolRequest, args *addArg
 	}, nil, nil
 }
 
-func (s *server) upperTool(_ context.Context, _ *mcp.CallToolRequest, args *upperArgs) (*mcp.CallToolResult, any, error) {
+func (s *server) upperTool(ctx context.Context, _ *mcp.CallToolRequest, args *upperArgs) (*mcp.CallToolResult, any, error) {
 	if args == nil {
 		args = &upperArgs{}
 	}
 	result := strings.ToUpper(args.Message)
-	s.emitAnalyticsEvent("tool.call", map[string]any{
+	s.emitAnalyticsEvent(ctx, "tool.call", map[string]any{
 		"tool":  "upper",
 		"input": map[string]any{"message": args.Message},
 	})
@@ -162,7 +162,7 @@ func (s *server) upperTool(_ context.Context, _ *mcp.CallToolRequest, args *uppe
 	}, nil, nil
 }
 
-func (s *server) readResource(_ context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+func (s *server) readResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	u, err := url.Parse(req.Params.URI)
 	if err != nil {
 		return nil, err
@@ -171,7 +171,7 @@ func (s *server) readResource(_ context.Context, req *mcp.ReadResourceRequest) (
 		return nil, fmt.Errorf("resource not found: %s", req.Params.URI)
 	}
 
-	s.emitAnalyticsEvent("resource.read", map[string]any{"uri": req.Params.URI})
+	s.emitAnalyticsEvent(ctx, "resource.read", map[string]any{"uri": req.Params.URI})
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{
 			{
@@ -183,7 +183,7 @@ func (s *server) readResource(_ context.Context, req *mcp.ReadResourceRequest) (
 	}, nil
 }
 
-func (s *server) getPrompt(_ context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+func (s *server) getPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	text := ""
 	if req != nil && req.Params != nil && req.Params.Arguments != nil {
 		if val, ok := req.Params.Arguments["text"]; ok {
@@ -195,7 +195,7 @@ func (s *server) getPrompt(_ context.Context, req *mcp.GetPromptRequest) (*mcp.G
 		summary = summary[:80] + "..."
 	}
 
-	s.emitAnalyticsEvent("prompt.render", map[string]any{"name": "summarize"})
+	s.emitAnalyticsEvent(ctx, "prompt.render", map[string]any{"name": "summarize"})
 	return &mcp.GetPromptResult{
 		Description: "Summarize a short text input",
 		Messages: []*mcp.PromptMessage{
@@ -207,7 +207,7 @@ func (s *server) getPrompt(_ context.Context, req *mcp.GetPromptRequest) (*mcp.G
 	}, nil
 }
 
-func (s *server) emitAnalyticsEvent(eventType string, payload map[string]any) {
+func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, payload map[string]any) {
 	if s.analyticsURL == "" {
 		return
 	}
@@ -224,7 +224,7 @@ func (s *server) emitAnalyticsEvent(eventType string, payload map[string]any) {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, s.analyticsURL, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(context.WithoutCancel(ctx), http.MethodPost, s.analyticsURL, bytes.NewReader(data))
 	if err != nil {
 		return
 	}
@@ -233,7 +233,10 @@ func (s *server) emitAnalyticsEvent(eventType string, payload map[string]any) {
 		req.Header.Set("x-api-key", s.apiKey)
 	}
 
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return

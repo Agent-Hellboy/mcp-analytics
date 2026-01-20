@@ -1,6 +1,6 @@
 module mcp-analytics-ingest
 
-go 1.21
+go 1.24
 
 require (
 	github.com/MicahParks/keyfunc v1.9.0
@@ -32,11 +32,11 @@ require (
 	go.opentelemetry.io/otel/metric v1.24.0 // indirect
 	go.opentelemetry.io/otel/trace v1.24.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.1.0 // indirect
-	golang.org/x/net v0.19.0 // indirect
-	golang.org/x/sys v0.17.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20240102182953-50ed04b92917 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20240102182953-50ed04b92917 // indirect
-	google.golang.org/grpc v1.61.1 // indirect
+	golang.org/x/net v0.33.0 // indirect
+	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/text v0.21.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20240123012728-ef4313101c80 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240123012728-ef4313101c80 // indirect
+	google.golang.org/grpc v1.62.2 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 )

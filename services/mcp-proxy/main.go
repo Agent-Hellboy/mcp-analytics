@@ -72,6 +72,7 @@ func main() {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = otelhttp.NewTransport(http.DefaultTransport)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("proxy error: %v", err)
 		http.Error(w, "upstream error", http.StatusBadGateway)
@@ -150,17 +151,17 @@ func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 			Payload:   payload,
 		}
 
-		go s.emit(event)
+		go s.emit(context.WithoutCancel(r.Context()), event)
 	}
 }
 
-func (s *proxyServer) emit(event analyticsEvent) {
+func (s *proxyServer) emit(ctx context.Context, event analyticsEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return
 	}
 
-	req, err := http.NewRequest(http.MethodPost, s.analyticsURL, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.analyticsURL, bytes.NewReader(data))
 	if err != nil {
 		return
 	}
@@ -169,7 +170,10 @@ func (s *proxyServer) emit(event analyticsEvent) {
 		req.Header.Set("x-api-key", s.apiKey)
 	}
 
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return

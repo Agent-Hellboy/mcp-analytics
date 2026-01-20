@@ -69,9 +69,18 @@ spec:
         app: loki
         loki_mode: stateful
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: loki
           image: grafana/loki:2.9.4
+          securityContext:
+            allowPrivilegeEscalation: false
           args: ["-config.file=/etc/loki/loki.yaml"]
           ports:
             - containerPort: 3100

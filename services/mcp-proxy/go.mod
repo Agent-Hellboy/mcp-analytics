@@ -1,6 +1,6 @@
 module mcp-analytics-mcp-proxy
 
-go 1.21
+go 1.24
 
 require (
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0

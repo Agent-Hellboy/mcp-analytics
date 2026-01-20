@@ -63,7 +63,7 @@ kubectl -n "$NAMESPACE" rollout status deployment/mcp-analytics-gateway --timeou
 kubectl -n "$NAMESPACE" rollout status deployment/mcp-example-server --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/mcp-example-sidecar --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/otel-collector --timeout=180s
-kubectl -n "$NAMESPACE" rollout status deployment/tempo --timeout=180s
+kubectl -n "$NAMESPACE" rollout status statefulset/tempo --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/loki --timeout="$LOKI_ROLLOUT_TIMEOUT"
 kubectl -n "$NAMESPACE" rollout status daemonset/promtail --timeout=180s
 
@@ -78,6 +78,20 @@ kubectl -n "$NAMESPACE" port-forward svc/loki "${LOKI_PORT}:3100" >/tmp/mcp-pf-l
 PIDS+=("$!")
 
 trap 'for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done' EXIT
+
+wait_port() {
+  local port="$1"
+  local tries=60
+  local i
+  for i in $(seq 1 "$tries"); do
+    if (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "timed out waiting for localhost:${port}" >&2
+  return 1
+}
 
 wait_http() {
   local url="$1"
@@ -94,6 +108,11 @@ wait_http() {
   echo "timed out waiting for $url" >&2
   return 1
 }
+
+wait_port "$GATEWAY_PORT"
+wait_port "$PROMETHEUS_PORT"
+wait_port "$TEMPO_PORT"
+wait_port "$LOKI_PORT"
 
 wait_http "http://127.0.0.1:${GATEWAY_PORT}/api/events?limit=1" "x-api-key: ${API_KEY}"
 wait_http "http://127.0.0.1:${PROMETHEUS_PORT}/api/v1/status/buildinfo" ""

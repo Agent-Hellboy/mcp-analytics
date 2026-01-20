@@ -102,17 +102,20 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 		return func(context.Context) error { return nil }, nil
 	}
 
-	// Parse and extract host:port if a full URL is provided
-	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
-		if u, err := url.Parse(endpoint); err == nil {
-			endpoint = u.Host
+	var opts []otlptracehttp.Option
+	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
+		opts = append(opts, otlptracehttp.WithEndpoint(u.Host))
+		if u.Path != "" {
+			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
 		}
+		if u.Scheme == "http" {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+	} else {
+		opts = append(opts, otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithInsecure())
 	}
 
-	exporter, err := otlptracehttp.New(context.Background(),
-		otlptracehttp.WithEndpoint(endpoint),
-		otlptracehttp.WithInsecure(), // TODO: make configurable for TLS
-	)
+	exporter, err := otlptracehttp.New(context.Background(), opts...)
 	if err != nil {
 		return nil, err
 	}
