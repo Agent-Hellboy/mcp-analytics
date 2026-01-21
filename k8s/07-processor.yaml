@@ -8,8 +8,8 @@ spec:
     app: mcp-analytics-processor
   ports:
     - name: metrics
-      port: 9092
-      targetPort: 9092
+      port: 9102
+      targetPort: 9102
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -40,13 +40,13 @@ spec:
               drop:
                 - ALL
           ports:
-            - containerPort: 9092
+            - containerPort: 9102
           envFrom:
             - configMapRef:
                 name: mcp-analytics-config
           env:
             - name: METRICS_PORT
-              value: "9092"
+              value: "9102"
             - name: OTEL_SERVICE_NAME
               value: mcp-analytics-processor
           resources:
@@ -59,12 +59,12 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: 9092
+              port: 9102
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
-              port: 9092
+              port: 9102
             initialDelaySeconds: 15
             periodSeconds: 20

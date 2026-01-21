@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -256,7 +257,7 @@ func (s *server) getPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp
 }
 
 // emitAnalyticsEvent sends MCP interaction events to the analytics ingest service.
-// It asynchronously posts events to the configured ingest endpoint.
+// It posts events to the configured ingest endpoint.
 // Used to track tool calls, resource reads, and prompt usage.
 func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, payload map[string]any) {
 	if s.analyticsURL == "" {
@@ -288,6 +289,7 @@ func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, paylo
 	if err != nil {
 		return
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 }
 

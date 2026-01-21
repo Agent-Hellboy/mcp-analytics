@@ -69,7 +69,7 @@ jobs:
       - name: Run smoke tests
         run: |
           set -euo pipefail
-          chmod +x scripts/smoke-ci.sh
+          chmod +x hack/smoke-ci.sh
           # Run full integration test on main branch or when explicitly requested
           if [ "${GITHUB_REF}" = "refs/heads/main" ] || [ "${RUN_FULL_SMOKE_TEST:-false}" = "true" ]; then
             export RUN_FULL_SMOKE_TEST=true
@@ -78,7 +78,7 @@ jobs:
             export RUN_FULL_SMOKE_TEST=false
             echo "🚀 Running fast smoke tests (CI optimized)"
           fi
-          ./scripts/smoke-ci.sh
+          ./hack/smoke-ci.sh
 
       - name: Validate manifests
         run: |
@@ -91,7 +91,7 @@ jobs:
           curl -sSL -o /tmp/CHECKSUMS https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/CHECKSUMS
 
           # Verify checksum
-          if ! grep "${KUBECONFORM_BINARY}" /tmp/CHECKSUMS | sha256sum --check --status; then
+          if ! (cd /tmp && grep "${KUBECONFORM_BINARY}" CHECKSUMS | sha256sum --check --status); then
             echo "❌ Checksum verification failed for kubeconform!"
             exit 1
           fi

@@ -119,8 +119,6 @@ func main() {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
-	mux.Handle("/events", server.auth(http.HandlerFunc(server.handleEvents)))
-	mux.Handle("/stats", server.auth(http.HandlerFunc(server.handleStats)))
 	mux.Handle("/api/events", server.auth(http.HandlerFunc(server.handleEvents)))
 	mux.Handle("/api/stats", server.auth(http.HandlerFunc(server.handleStats)))
 	mux.Handle("/api/sources", server.auth(http.HandlerFunc(server.handleSources)))
@@ -402,7 +400,8 @@ func (s *apiServer) auth(next http.Handler) http.Handler {
 
 		token := extractBearer(r.Header.Get("authorization"))
 		if token != "" && s.jwks != nil {
-			parsed, err := jwt.Parse(token, s.jwks.Keyfunc)
+			parser := jwt.NewParser(jwt.WithValidMethods([]string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}))
+			parsed, err := parser.Parse(token, s.jwks.Keyfunc)
 			if err == nil && parsed.Valid {
 				if s.oidcIssuer != "" || s.oidcAudience != "" {
 					claims, ok := parsed.Claims.(jwt.MapClaims)

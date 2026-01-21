@@ -39,7 +39,7 @@ func main() {
 	brokers := strings.Split(envOr("KAFKA_BROKERS", "kafka:9092"), ",")
 	topic := envOr("KAFKA_TOPIC", "mcp.events")
 	groupID := envOr("KAFKA_GROUP", "mcp-analytics-processor")
-	metricsPort := envOr("METRICS_PORT", "9092")
+	metricsPort := envOr("METRICS_PORT", "9102")
 
 	clickhouseAddr := envOr("CLICKHOUSE_ADDR", "clickhouse:9000")
 	dbName := envOr("CLICKHOUSE_DB", "mcp")

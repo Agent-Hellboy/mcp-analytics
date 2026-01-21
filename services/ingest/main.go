@@ -90,7 +90,6 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.Handle("/events", server.auth(http.HandlerFunc(server.handleEvents)))
-	mux.Handle("/ingest/events", server.auth(http.HandlerFunc(server.handleEvents)))
 
 	shutdown, err := initTracer("mcp-analytics-ingest")
 	if err != nil {
@@ -148,7 +147,7 @@ func main() {
 
 const maxBodySize = 1 << 20 // 1MB
 
-// handleEvents handles POST /ingest/events requests.
+// handleEvents handles POST /events requests.
 // It validates incoming MCP events, enriches them with metadata,
 // and produces them to the configured Kafka topic.
 // Returns success/error response based on validation and publishing status.

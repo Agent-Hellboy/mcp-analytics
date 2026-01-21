@@ -6,7 +6,7 @@ echo "🚀 Running CI Smoke Tests"
 # Test 0: Build and test services/api
 echo "🔨 Building and testing services/api"
 if command -v go >/dev/null 2>&1; then
-    scripts/go-test.sh services/api
+    hack/go-test.sh services/api
 else
     echo "⚠️  Go not available, skipping services/api tests"
 fi
@@ -83,12 +83,12 @@ fi
 echo "📄 Testing YAML syntax..."
 if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" >/dev/null 2>&1; then
     yaml_errors=0
-    for yaml_file in $(find k8s -name "*.yaml" -o -name "*.yml"); do
-        if ! python3 -c "import yaml; yaml.safe_load_all(open('$yaml_file'))" 2>/dev/null; then
+    while IFS= read -r -d '' yaml_file; do
+        if ! python3 -c "import yaml, sys; yaml.safe_load_all(open(sys.argv[1]))" "$yaml_file" 2>/dev/null; then
             echo "❌ YAML syntax error in $yaml_file"
             yaml_errors=$((yaml_errors + 1))
         fi
-    done
+    done < <(find k8s \( -name "*.yaml" -o -name "*.yml" \) -print0)
 
     if [ $yaml_errors -eq 0 ]; then
         echo "✅ All YAML files syntactically valid"
@@ -131,19 +131,19 @@ fi
 
 # Test 6: Optional full integration test with minikube
 if [ "${RUN_FULL_SMOKE_TEST:-false}" = "true" ]; then
-    echo "🧪 Running full integration test (smoke-minikube.sh)..."
-    if [ -f "scripts/smoke-minikube.sh" ]; then
-        chmod +x scripts/smoke-minikube.sh
+    echo "🧪 Running full integration test (smoketest.sh)..."
+    if [ -f "tests/smoketest.sh" ]; then
+        chmod +x tests/smoketest.sh
         echo "Starting comprehensive smoke test with Kind cluster..."
         # Run in background and capture exit code
-        if scripts/smoke-minikube.sh; then
+        if tests/smoketest.sh; then
             echo "✅ Full integration test passed"
         else
             echo "❌ Full integration test failed"
             exit 1
         fi
     else
-        echo "⚠️  smoke-minikube.sh not found, skipping full integration test"
+        echo "⚠️  smoketest.sh not found, skipping full integration test"
     fi
 else
     echo "⚠️  Full integration test skipped (set RUN_FULL_SMOKE_TEST=true to enable)"
