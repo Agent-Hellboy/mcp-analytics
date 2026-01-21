@@ -350,20 +350,21 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	if u, err := url.Parse(endpoint); err == nil {
 		// Handle URLs with schemes (http://host:port/path)
 		if u.Scheme != "" && u.Host != "" {
-		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
-		if u.Path != "" {
-			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
-		}
-		if insecureSet {
-			if insecure {
+			opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
+			if u.Path != "" {
+				opts = append(opts, otlptracehttp.WithURLPath(u.Path))
+			}
+			if insecureSet {
+				if insecure {
+					opts = append(opts, otlptracehttp.WithInsecure())
+				}
+				return opts
+			}
+			if u.Scheme == "http" {
 				opts = append(opts, otlptracehttp.WithInsecure())
 			}
 			return opts
 		}
-		if u.Scheme == "http" {
-			opts = append(opts, otlptracehttp.WithInsecure())
-		}
-		return opts
 		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
 		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
 		if u.Scheme != "" && u.Host == "" {

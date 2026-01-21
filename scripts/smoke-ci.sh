@@ -3,6 +3,14 @@ set -euo pipefail
 
 echo "🚀 Running CI Smoke Tests"
 
+# Test 0: Build and test services/api
+echo "🔨 Building and testing services/api"
+if command -v go >/dev/null 2>&1; then
+    scripts/go-test.sh services/api
+else
+    echo "⚠️  Go not available, skipping services/api tests"
+fi
+
 # Test 1: Verify binaries exist and are executable (if built)
 echo "📁 Testing compiled binaries..."
 binaries_found=0
