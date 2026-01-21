@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-analytics-api
+  namespace: mcp-analytics
+spec:
+  selector:
+    app: mcp-analytics-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-analytics-api
+  namespace: mcp-analytics
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mcp-analytics-api
+  template:
+    metadata:
+      labels:
+        app: mcp-analytics-api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: api
+          image: mcp-analytics-api:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 8080
+            - containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: mcp-analytics-config
+            - secretRef:
+                name: mcp-analytics-secrets
+          env:
+            - name: PORT
+              value: "8080"
+            - name: METRICS_PORT
+              value: "9090"
+            - name: API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-analytics-secrets
+                  key: API_KEYS
+            - name: OTEL_SERVICE_NAME
+              value: mcp-analytics-api
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20

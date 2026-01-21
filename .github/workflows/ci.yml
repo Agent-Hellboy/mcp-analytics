@@ -1,0 +1,102 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false  # Disable caching since this is a multi-module project
+
+      - name: Build and test services
+        run: |
+          set -euo pipefail
+          for svc in services/api services/ingest services/processor services/ui services/mcp-server services/mcp-proxy; do
+            echo "🔨 Building and testing $svc"
+            (cd "$svc" && go build -o "$(basename "$svc")" . && go test ./... -v)
+          done
+
+
+      - name: Check Go version consistency
+        run: |
+          set -euo pipefail
+          echo "🔍 Checking Go version consistency across services"
+          versions=$(for svc in services/*/go.mod; do
+            if [ -f "$svc" ]; then
+              grep "^go " "$svc" | sed 's/go //' || echo "no version found in $svc"
+            fi
+          done | sort | uniq)
+          version_count=$(echo "$versions" | grep -v '^$' | wc -l)
+          if [ "$version_count" -gt 1 ]; then
+            echo "⚠️  Multiple Go versions found:"
+            echo "$versions" | grep -v '^$'
+            echo "Consider standardizing on a single Go version"
+          elif [ "$version_count" -eq 1 ]; then
+            echo "✅ All services use Go version: $(echo "$versions" | grep -v '^$')"
+          else
+            echo "⚠️  No Go versions found in go.mod files"
+          fi
+
+      - name: Build Docker images
+        run: |
+          set -euo pipefail
+          echo "🐳 Building Docker images for testing"
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "⚠️  Docker not available, skipping Docker build tests"
+            exit 0
+          fi
+          for svc in api ingest processor ui mcp-server mcp-proxy; do
+            dockerfile="services/$svc/Dockerfile"
+            if [ -f "$dockerfile" ]; then
+              echo "Building $dockerfile"
+              docker build -f "$dockerfile" -t "mcp-$svc:test" "services/$svc"
+            else
+              echo "⚠️  Dockerfile not found: $dockerfile"
+            fi
+          done
+          echo "✅ All Docker images built successfully"
+
+      - name: Run smoke tests
+        run: |
+          set -euo pipefail
+          chmod +x hack/smoke-ci.sh
+          # Run full integration test on main branch or when explicitly requested
+          if [ "${GITHUB_REF}" = "refs/heads/main" ] || [ "${RUN_FULL_SMOKE_TEST:-false}" = "true" ]; then
+            export RUN_FULL_SMOKE_TEST=true
+            echo "🧪 Running comprehensive smoke tests (including Kind cluster)"
+          else
+            export RUN_FULL_SMOKE_TEST=false
+            echo "🚀 Running fast smoke tests (CI optimized)"
+          fi
+          ./hack/smoke-ci.sh
+
+      - name: Validate manifests
+        run: |
+          set -euo pipefail
+          KUBECONFORM_VERSION="v0.6.7"
+          KUBECONFORM_BINARY="kubeconform-linux-amd64.tar.gz"
+
+          echo "🔒 Downloading kubeconform ${KUBECONFORM_VERSION} with checksum verification"
+          curl -sSL -o /tmp/${KUBECONFORM_BINARY} https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/${KUBECONFORM_BINARY}
+          curl -sSL -o /tmp/CHECKSUMS https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/CHECKSUMS
+
+          # Verify checksum
+          if ! (cd /tmp && grep "${KUBECONFORM_BINARY}" CHECKSUMS | sha256sum --check --status); then
+            echo "❌ Checksum verification failed for kubeconform!"
+            exit 1
+          fi
+
+          echo "✅ Checksum verification passed"
+          tar -xzf /tmp/${KUBECONFORM_BINARY} -C /tmp kubeconform
+          chmod +x /tmp/kubeconform
+          /tmp/kubeconform -kubernetes-version 1.34.0 -summary -strict k8s/*.yaml
