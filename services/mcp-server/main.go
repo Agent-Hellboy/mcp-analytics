@@ -257,7 +257,8 @@ func (s *server) getPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp
 }
 
 // emitAnalyticsEvent sends MCP interaction events to the analytics ingest service.
-// It posts events to the configured ingest endpoint.
+// It asynchronously posts events to the configured ingest endpoint.
+// The HTTP request itself is also asynchronous within the function.
 // Used to track tool calls, resource reads, and prompt usage.
 func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, payload map[string]any) {
 	if s.analyticsURL == "" {
@@ -285,12 +286,26 @@ func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, paylo
 		req.Header.Set("x-api-key", s.apiKey)
 	}
 
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
+	// Make the HTTP request truly asynchronous
+	go func() {
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			// Log analytics emission failures for monitoring and debugging
+			log.Printf("failed to emit analytics event %q to %s: %v", eventType, s.analyticsURL, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		// Check for non-2xx status codes
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("analytics emission failed with status %d for event %q to %s", resp.StatusCode, eventType, s.analyticsURL)
+			_, _ = io.Copy(io.Discard, resp.Body) // Drain response body
+			return
+		}
+
+		// Successfully drain response body
+		_, _ = io.Copy(io.Discard, resp.Body)
+	}()
 }
 
 // writeJSON writes a JSON response with the specified status code.

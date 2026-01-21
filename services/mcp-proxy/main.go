@@ -193,6 +193,7 @@ func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 
 // emit sends analytics events to the ingest service.
 // It asynchronously posts events to the configured analytics endpoint.
+// The HTTP request itself is also asynchronous within the function.
 // Captures MCP proxy interactions for analytics and monitoring.
 func (s *proxyServer) emit(ctx context.Context, event analyticsEvent) {
 	data, err := json.Marshal(event)
@@ -209,12 +210,26 @@ func (s *proxyServer) emit(ctx context.Context, event analyticsEvent) {
 		req.Header.Set("x-api-key", s.apiKey)
 	}
 
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
+	// Make the HTTP request truly asynchronous
+	go func() {
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			// Log analytics emission failures for monitoring and debugging
+			log.Printf("failed to emit proxy analytics event to %s: %v", s.analyticsURL, err)
+			return
+		}
+		defer resp.Body.Close()
+
+		// Check for non-2xx status codes
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("proxy analytics emission failed with status %d to %s", resp.StatusCode, s.analyticsURL)
+			_, _ = io.Copy(io.Discard, resp.Body) // Drain response body
+			return
+		}
+
+		// Successfully drain response body
+		_, _ = io.Copy(io.Discard, resp.Body)
+	}()
 }
 
 // WriteHeader records the HTTP response status code.
