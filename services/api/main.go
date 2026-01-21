@@ -27,10 +27,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +73,9 @@ func main() {
 	metricsPort := envOr("METRICS_PORT", "9090")
 	clickhouseAddr := envOr("CLICKHOUSE_ADDR", "clickhouse:9000")
 	dbName := envOr("CLICKHOUSE_DB", "mcp")
+	if err := validateDBName(dbName); err != nil {
+		log.Fatalf("invalid CLICKHOUSE_DB: %v", err)
+	}
 
 	apiKeys := map[string]struct{}{}
 	for _, key := range strings.Split(envOr("API_KEYS", ""), ",") {
@@ -228,6 +233,10 @@ func (s *apiServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		events = append(events, row)
 	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "iteration_failed"})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
@@ -273,6 +282,10 @@ func (s *apiServer) handleSources(w http.ResponseWriter, r *http.Request) {
 		}
 		sources = append(sources, stat)
 	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "iteration_failed"})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"sources": sources})
 }
@@ -302,6 +315,10 @@ func (s *apiServer) handleEventTypes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		eventTypes = append(eventTypes, stat)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "iteration_failed"})
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"event_types": eventTypes})
@@ -359,6 +376,10 @@ func (s *apiServer) handleEventsFilter(w http.ResponseWriter, r *http.Request) {
 			row.Payload = raw
 		}
 		events = append(events, row)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "iteration_failed"})
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
@@ -443,13 +464,24 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
 // logRequests is middleware that logs HTTP requests.
 // It logs the HTTP method, URL path, response status, and duration.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		log.Printf("%s %s %d %s", r.Method, r.URL.Path, recorder.status, time.Since(start))
 	})
 }
 
@@ -460,7 +492,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil {
 		// Handle URLs with schemes (http://host:port/path)
-		if u.Scheme != "" && u.Host != "" {
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		} else if u.Scheme != "" && u.Host != "" {
 			opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 			if u.Path != "" {
 				opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -476,11 +510,6 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			}
 			return opts
 		}
-		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
-		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
-		if u.Scheme != "" && u.Host == "" {
-			// This is a scheme-less endpoint, fall through to treat as host:port
-		}
 	}
 
 	// Fallback: treat entire endpoint as host:port
@@ -491,7 +520,7 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 		}
 		return opts
 	}
-	return append(opts, otlptracehttp.WithInsecure())
+	return opts
 }
 
 // boolEnv parses a boolean environment variable.
@@ -543,4 +572,19 @@ func clampInt(value, minVal, maxVal int) int {
 		return maxVal
 	}
 	return value
+}
+
+// validateDBName validates ClickHouse database name format.
+func validateDBName(name string) error {
+	if name == "" {
+		return fmt.Errorf("empty")
+	}
+	matched, err := regexp.MatchString(`^[A-Za-z_][A-Za-z0-9_]*$`, name)
+	if err != nil {
+		return err
+	}
+	if !matched {
+		return fmt.Errorf("must match ^[A-Za-z_][A-Za-z0-9_]*$")
+	}
+	return nil
 }

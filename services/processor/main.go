@@ -49,6 +49,14 @@ func main() {
 
 	batchSize := envInt("BATCH_SIZE", 500)
 	flushInterval := envDuration("FLUSH_INTERVAL", 2*time.Second)
+	if batchSize <= 0 {
+		log.Printf("invalid BATCH_SIZE=%d; using default 500", batchSize)
+		batchSize = 500
+	}
+	if flushInterval <= 0 {
+		log.Printf("invalid FLUSH_INTERVAL=%s; using default 2s", flushInterval)
+		flushInterval = 2 * time.Second
+	}
 
 	conn, err := clickhouse.Open(&clickhouse.Options{
 		Addr:        []string{clickhouseAddr},
@@ -107,6 +115,7 @@ func main() {
 	defer ticker.Stop()
 
 	batch := make([]eventPayload, 0, batchSize)
+	batchMessages := make([]kafka.Message, 0, batchSize)
 
 	flush := func() {
 		if len(batch) == 0 {
@@ -120,15 +129,20 @@ func main() {
 			span.End()
 			return
 		}
+		if err := reader.CommitMessages(ctx, batchMessages...); err != nil {
+			log.Printf("commit failed: %v", err)
+			span.RecordError(err)
+		}
 		span.End()
 		batch = batch[:0]
+		batchMessages = batchMessages[:0]
 	}
 
 	msgChan := make(chan kafka.Message, 100)
 	errChan := make(chan error, 1)
 	go func() {
 		for {
-			msg, err := reader.ReadMessage(ctx)
+			msg, err := reader.FetchMessage(ctx)
 			if err != nil {
 				select {
 				case errChan <- err:
@@ -164,6 +178,9 @@ func main() {
 				log.Printf("invalid message: %v", err)
 				span.RecordError(err)
 				span.End()
+				if err := reader.CommitMessages(ctx, msg); err != nil {
+					log.Printf("commit failed: %v", err)
+				}
 				continue
 			}
 
@@ -172,6 +189,7 @@ func main() {
 			}
 
 			batch = append(batch, payload)
+			batchMessages = append(batchMessages, msg)
 			span.End()
 			if len(batch) >= batchSize {
 				flush()
@@ -221,7 +239,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil {
 		// Handle URLs with schemes (http://host:port/path)
-		if u.Scheme != "" && u.Host != "" {
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		} else if u.Scheme != "" && u.Host != "" {
 			opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 			if u.Path != "" {
 				opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -237,11 +257,6 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			}
 			return opts
 		}
-		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
-		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
-		if u.Scheme != "" && u.Host == "" {
-			// This is a scheme-less endpoint, fall through to treat as host:port
-		}
 	}
 
 	// Fallback: treat entire endpoint as host:port
@@ -252,7 +267,7 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 		}
 		return opts
 	}
-	return append(opts, otlptracehttp.WithInsecure())
+	return opts
 }
 
 // insertBatch performs bulk insert of MCP events into ClickHouse.

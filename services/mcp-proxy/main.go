@@ -145,12 +145,19 @@ func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	originalPath := r.URL.Path
+	originalQuery := r.URL.RawQuery
 	rpcMethod, toolName := extractRPCInfo(r)
 
 	if s.stripPrefix != "" && strings.HasPrefix(r.URL.Path, s.stripPrefix) {
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, s.stripPrefix)
+		if r.URL.RawPath != "" {
+			r.URL.RawPath = strings.TrimPrefix(r.URL.RawPath, s.stripPrefix)
+		}
 		if r.URL.Path == "" {
 			r.URL.Path = "/"
+			if r.URL.RawPath != "" {
+				r.URL.RawPath = "/"
+			}
 		}
 	}
 
@@ -160,7 +167,7 @@ func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 		payload := map[string]any{
 			"method":     r.Method,
 			"path":       originalPath,
-			"query":      r.URL.RawQuery,
+			"query":      originalQuery,
 			"status":     recorder.status,
 			"latency_ms": time.Since(start).Milliseconds(),
 			"bytes_in":   maxInt64(r.ContentLength, 0),
@@ -206,6 +213,7 @@ func (s *proxyServer) emit(ctx context.Context, event analyticsEvent) {
 	if err != nil {
 		return
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 }
 
@@ -258,7 +266,7 @@ func extractRPCInfo(r *http.Request) (string, string) {
 	if r.Method != http.MethodPost {
 		return "", ""
 	}
-	contentType := r.Header.Get("content-type")
+	contentType := strings.ToLower(r.Header.Get("content-type"))
 	if contentType != "" && !strings.Contains(contentType, "application/json") {
 		return "", ""
 	}
@@ -268,7 +276,6 @@ func extractRPCInfo(r *http.Request) (string, string) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		r.Body = io.NopCloser(bytes.NewBuffer(body))
 		return "", ""
 	}
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
@@ -349,7 +356,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil {
 		// Handle URLs with schemes (http://host:port/path)
-		if u.Scheme != "" && u.Host != "" {
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		} else if u.Scheme != "" && u.Host != "" {
 			opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 			if u.Path != "" {
 				opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -365,11 +374,6 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			}
 			return opts
 		}
-		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
-		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
-		if u.Scheme != "" && u.Host == "" {
-			// This is a scheme-less endpoint, fall through to treat as host:port
-		}
 	}
 
 	// Fallback: treat entire endpoint as host:port
@@ -380,7 +384,7 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 		}
 		return opts
 	}
-	return append(opts, otlptracehttp.WithInsecure())
+	return opts
 }
 
 // boolEnv parses a boolean environment variable.

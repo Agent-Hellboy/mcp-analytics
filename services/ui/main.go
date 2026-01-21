@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"embed"
 	"log"
 	"mime"
@@ -35,9 +36,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/config.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/javascript")
-		config := "window.MCP_API_BASE = \"" + apiBase + "\";"
+		baseJSON, _ := json.Marshal(apiBase)
+		config := "window.MCP_API_BASE = " + string(baseJSON) + ";"
 		if apiKey != "" {
-			config += "window.MCP_API_KEY = \"" + apiKey + "\";"
+			keyJSON, _ := json.Marshal(apiKey)
+			config += "window.MCP_API_KEY = " + string(keyJSON) + ";"
 		}
 		_, _ = w.Write([]byte(config))
 	})
@@ -95,9 +98,21 @@ func main() {
 // It logs the HTTP method, URL path, response status, and duration.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s", r.Method, r.URL.Path)
+		start := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		log.Printf("%s %s %d %s", r.Method, r.URL.Path, recorder.status, time.Since(start))
 	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
 }
 
 // initTracer initializes OpenTelemetry tracing for the service.
@@ -151,7 +166,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil {
 		// Handle URLs with schemes (http://host:port/path)
-		if u.Scheme != "" && u.Host != "" {
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		} else if u.Scheme != "" && u.Host != "" {
 			opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 			if u.Path != "" {
 				opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -167,11 +184,6 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			}
 			return opts
 		}
-		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
-		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
-		if u.Scheme != "" && u.Host == "" {
-			// This is a scheme-less endpoint, fall through to treat as host:port
-		}
 	}
 
 	// Fallback: treat entire endpoint as host:port
@@ -182,7 +194,7 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 		}
 		return opts
 	}
-	return append(opts, otlptracehttp.WithInsecure())
+	return opts
 }
 
 // boolEnv parses a boolean environment variable.

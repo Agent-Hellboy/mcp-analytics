@@ -132,7 +132,7 @@ import urllib.request
 
 base = f"http://127.0.0.1:{os.environ.get('GATEWAY_PORT', '8083')}/mcp"
 
-def post(msg, session_id=None):
+def post(msg, session_id=None, timeout=5):
     headers = {
         "content-type": "application/json",
         "accept": "application/json, text/event-stream",
@@ -142,12 +142,14 @@ def post(msg, session_id=None):
         headers["Mcp-Session-Id"] = session_id
     req = urllib.request.Request(base, data=json.dumps(msg).encode(), headers=headers)
     try:
-        resp = urllib.request.urlopen(req)
+        resp = urllib.request.urlopen(req, timeout=timeout)
         body = resp.read().decode()
         return resp.headers.get("Mcp-Session-Id") or session_id, body
     except urllib.error.HTTPError as exc:
         body = exc.read().decode()
         raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"request failed: {exc}") from exc
 
 sid, body = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
 if not sid:
@@ -193,7 +195,7 @@ import urllib.request
 
 base = f"http://127.0.0.1:{os.environ.get('GATEWAY_PORT', '8083')}/mcp-auto"
 
-def post(msg, session_id=None):
+def post(msg, session_id=None, timeout=5):
     headers = {
         "content-type": "application/json",
         "accept": "application/json, text/event-stream",
@@ -203,12 +205,14 @@ def post(msg, session_id=None):
         headers["Mcp-Session-Id"] = session_id
     req = urllib.request.Request(base, data=json.dumps(msg).encode(), headers=headers)
     try:
-        resp = urllib.request.urlopen(req)
+        resp = urllib.request.urlopen(req, timeout=timeout)
         body = resp.read().decode()
         return resp.headers.get("Mcp-Session-Id") or session_id, body
     except urllib.error.HTTPError as exc:
         body = exc.read().decode()
         raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"request failed: {exc}") from exc
 
 sid, body = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
 if not sid:

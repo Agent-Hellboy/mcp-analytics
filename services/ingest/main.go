@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/MicahParks/keyfunc"
@@ -42,6 +45,9 @@ type ingestServer struct {
 // It sets up Kafka producer connection, configures authentication, initializes tracing,
 // sets up HTTP routes, and starts the server on the configured port.
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	port := envOr("PORT", "8081")
 	metricsPort := envOr("METRICS_PORT", "9091")
 	brokers := strings.Split(envOr("KAFKA_BROKERS", "kafka:9092"), ",")
@@ -97,18 +103,18 @@ func main() {
 		}()
 	}
 
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsServer := &http.Server{
+		Addr:              ":" + metricsPort,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	go func() {
-		metricsMux := http.NewServeMux()
-		metricsMux.Handle("/metrics", promhttp.Handler())
-		metricsServer := &http.Server{
-			Addr:              ":" + metricsPort,
-			Handler:           metricsMux,
-			ReadHeaderTimeout: 5 * time.Second,
-			ReadTimeout:       15 * time.Second,
-			WriteTimeout:      15 * time.Second,
-			IdleTimeout:       60 * time.Second,
-		}
-		if err := metricsServer.ListenAndServe(); err != nil {
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("metrics server stopped: %v", err)
 		}
 	}()
@@ -123,8 +129,20 @@ func main() {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	if err := httpServer.ListenAndServe(); err != nil {
-		log.Fatalf("server failed: %v", err)
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
+	_ = metricsServer.Shutdown(shutdownCtx)
+	_ = writer.Close()
+	if shutdown != nil {
+		_ = shutdown(shutdownCtx)
 	}
 }
 
@@ -176,6 +194,11 @@ func (s *ingestServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 // If no API keys are configured, authentication is bypassed.
 func (s *ingestServer) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(s.apiKeys) == 0 && s.jwks == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		if len(s.apiKeys) > 0 {
 			apiKey := strings.TrimSpace(r.Header.Get("x-api-key"))
 			if apiKey != "" {
@@ -188,7 +211,8 @@ func (s *ingestServer) auth(next http.Handler) http.Handler {
 
 		token := extractBearer(r.Header.Get("authorization"))
 		if token != "" && s.jwks != nil {
-			parsed, err := jwt.Parse(token, s.jwks.Keyfunc)
+			parser := jwt.NewParser(jwt.WithValidMethods([]string{"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}))
+			parsed, err := parser.Parse(token, s.jwks.Keyfunc)
 			if err == nil && parsed.Valid {
 				if s.oidcIssuer != "" || s.oidcAudience != "" {
 					claims, ok := parsed.Claims.(jwt.MapClaims)
@@ -250,13 +274,24 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
 // logRequests is middleware that logs HTTP requests.
 // It logs the HTTP method, URL path, response status, and duration.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start))
+		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(recorder, r)
+		log.Printf("%s %s %d %s", r.Method, r.URL.Path, recorder.status, time.Since(start))
 	})
 }
 
@@ -311,7 +346,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil {
 		// Handle URLs with schemes (http://host:port/path)
-		if u.Scheme != "" && u.Host != "" {
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		} else if u.Scheme != "" && u.Host != "" {
 			opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 			if u.Path != "" {
 				opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -327,11 +364,6 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			}
 			return opts
 		}
-		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
-		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
-		if u.Scheme != "" && u.Host == "" {
-			// This is a scheme-less endpoint, fall through to treat as host:port
-		}
 	}
 
 	// Fallback: treat entire endpoint as host:port
@@ -342,7 +374,7 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 		}
 		return opts
 	}
-	return append(opts, otlptracehttp.WithInsecure())
+	return opts
 }
 
 // boolEnv parses a boolean environment variable.

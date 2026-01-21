@@ -79,8 +79,6 @@ jobs:
             echo "🚀 Running fast smoke tests (CI optimized)"
           fi
           ./scripts/smoke-ci.sh
-        env:
-          RUN_FULL_SMOKE_TEST: ${{ github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Validate manifests
         run: |
