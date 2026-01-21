@@ -38,6 +38,9 @@ type ingestServer struct {
 	oidcAudience string
 }
 
+// main initializes and starts the MCP Analytics Ingest service.
+// It sets up Kafka producer connection, configures authentication, initializes tracing,
+// sets up HTTP routes, and starts the server on the configured port.
 func main() {
 	port := envOr("PORT", "8081")
 	metricsPort := envOr("METRICS_PORT", "9091")
@@ -111,6 +114,10 @@ func main() {
 
 const maxBodySize = 1 << 20 // 1MB
 
+// handleEvents handles POST /ingest/events requests.
+// It validates incoming MCP events, enriches them with metadata,
+// and produces them to the configured Kafka topic.
+// Returns success/error response based on validation and publishing status.
 func (s *ingestServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -148,6 +155,9 @@ func (s *ingestServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true})
 }
 
+// auth is middleware that enforces API key authentication.
+// It checks for x-api-key header or supports optional OIDC JWT validation.
+// If no API keys are configured, authentication is bypassed.
 func (s *ingestServer) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(s.apiKeys) > 0 {
@@ -190,6 +200,8 @@ func (s *ingestServer) auth(next http.Handler) http.Handler {
 	})
 }
 
+// audienceMatches validates if the JWT audience claim matches the expected value.
+// It handles both string and string slice audience claims as per JWT specifications.
 func audienceMatches(audClaim any, expected string) bool {
 	switch aud := audClaim.(type) {
 	case string:
@@ -204,6 +216,9 @@ func audienceMatches(audClaim any, expected string) bool {
 	return false
 }
 
+// extractBearer extracts the JWT token from an Authorization header.
+// It expects the format "Bearer <token>" and returns the token part.
+// Returns empty string if the format is invalid.
 func extractBearer(auth string) string {
 	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
 		return strings.TrimSpace(auth[7:])
@@ -211,12 +226,16 @@ func extractBearer(auth string) string {
 	return ""
 }
 
+// writeJSON writes a JSON response with the specified status code.
+// It sets appropriate Content-Type headers and handles JSON marshaling errors.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// logRequests is middleware that logs HTTP requests.
+// It logs the HTTP method, URL path, response status, and duration.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -225,6 +244,10 @@ func logRequests(next http.Handler) http.Handler {
 	})
 }
 
+// initTracer initializes OpenTelemetry tracing for the service.
+// It configures OTLP HTTP exporter and sets up the tracer provider.
+// Returns a shutdown function to clean up resources and any initialization error.
+// If no OTEL_EXPORTER_OTLP_ENDPOINT is configured, returns a no-op shutdown function.
 func initTracer(serviceName string) (func(context.Context) error, error) {
 	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
 		serviceName = envName
@@ -255,6 +278,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	return provider.Shutdown, nil
 }
 
+// envOr returns the value of an environment variable or a fallback if not set.
+// If the environment variable is set to a non-empty value, it returns that value.
+// Otherwise, it returns the provided fallback value.
 func envOr(key, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		return val
@@ -262,6 +288,9 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// otlpTraceOptions configures OTLP HTTP exporter options.
+// It sets up the endpoint URL and configures secure/insecure connections
+// based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
@@ -291,6 +320,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	return append(opts, otlptracehttp.WithInsecure())
 }
 
+// boolEnv parses a boolean environment variable.
+// It returns the parsed boolean value and true if parsing succeeded.
+// Returns false, false if the variable is not set or parsing failed.
 func boolEnv(key string) (bool, bool) {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		parsed, err := strconv.ParseBool(val)

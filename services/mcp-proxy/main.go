@@ -58,6 +58,9 @@ type statusRecorder struct {
 
 const maxRPCBodyBytes = 1 << 20
 
+// main initializes and starts the MCP Proxy service.
+// It acts as a reverse proxy for MCP servers while capturing analytics.
+// Forwards requests to upstream MCP servers and emits analytics events.
 func main() {
 	port := envOr("PORT", "8091")
 	upstream := envOr("UPSTREAM_URL", "http://127.0.0.1:8090")
@@ -113,6 +116,9 @@ func main() {
 	}
 }
 
+// handleProxy handles incoming MCP requests and forwards them to upstream servers.
+// It captures request/response metrics, extracts MCP RPC information,
+// forwards the request to the configured upstream, and emits analytics events.
 func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -156,6 +162,9 @@ func (s *proxyServer) handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// emit sends analytics events to the ingest service.
+// It asynchronously posts events to the configured analytics endpoint.
+// Captures MCP proxy interactions for analytics and monitoring.
 func (s *proxyServer) emit(ctx context.Context, event analyticsEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
@@ -182,23 +191,31 @@ func (s *proxyServer) emit(ctx context.Context, event analyticsEvent) {
 	_ = resp.Body.Close()
 }
 
+// WriteHeader records the HTTP response status code.
+// Implements http.ResponseWriter interface for status tracking.
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
 }
 
+// Write records response data and updates byte count.
+// Implements http.ResponseWriter interface for response body tracking.
 func (r *statusRecorder) Write(data []byte) (int, error) {
 	n, err := r.ResponseWriter.Write(data)
 	r.bytes += n
 	return n, err
 }
 
+// Flush forwards flush calls to the underlying ResponseWriter.
+// Implements http.Flusher interface for HTTP/1.1 chunked responses.
 func (r *statusRecorder) Flush() {
 	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
 }
 
+// Hijack forwards hijack calls to the underlying ResponseWriter.
+// Implements http.Hijacker interface for WebSocket upgrades and similar.
 func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hijacker, ok := r.ResponseWriter.(http.Hijacker)
 	if !ok {
@@ -207,6 +224,8 @@ func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hijacker.Hijack()
 }
 
+// Push forwards HTTP/2 server push calls to the underlying ResponseWriter.
+// Implements http.Pusher interface for HTTP/2 server push functionality.
 func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
 	if pusher, ok := r.ResponseWriter.(http.Pusher); ok {
 		return pusher.Push(target, opts)
@@ -214,6 +233,9 @@ func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
 	return http.ErrNotSupported
 }
 
+// extractRPCInfo extracts MCP RPC method and session ID from HTTP requests.
+// Parses JSON-RPC request body to identify MCP operations for analytics.
+// Returns method name and session ID for tracking purposes.
 func extractRPCInfo(r *http.Request) (string, string) {
 	if r.Method != http.MethodPost {
 		return "", ""
@@ -249,6 +271,9 @@ func extractRPCInfo(r *http.Request) (string, string) {
 	return req.Method, toolName
 }
 
+// envOr returns the value of an environment variable or a fallback if not set.
+// If the environment variable is set to a non-empty value, it returns that value.
+// Otherwise, it returns the provided fallback value.
 func envOr(key, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		return val
@@ -256,6 +281,8 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// maxInt64 returns the maximum of two int64 values.
+// Used to ensure size limits don't exceed configured maximums.
 func maxInt64(value, fallback int64) int64 {
 	if value < 0 {
 		return fallback
@@ -263,6 +290,10 @@ func maxInt64(value, fallback int64) int64 {
 	return value
 }
 
+// initTracer initializes OpenTelemetry tracing for the service.
+// It configures OTLP HTTP exporter and sets up the tracer provider.
+// Returns a shutdown function to clean up resources and any initialization error.
+// If no OTEL_EXPORTER_OTLP_ENDPOINT is configured, returns a no-op shutdown function.
 func initTracer(serviceName string) (func(context.Context) error, error) {
 	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
 		serviceName = envName
@@ -293,6 +324,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	return provider.Shutdown, nil
 }
 
+// otlpTraceOptions configures OTLP HTTP exporter options.
+// It sets up the endpoint URL and configures secure/insecure connections
+// based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
@@ -322,6 +356,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	return append(opts, otlptracehttp.WithInsecure())
 }
 
+// boolEnv parses a boolean environment variable.
+// It returns the parsed boolean value and true if parsing succeeded.
+// Returns false, false if the variable is not set or parsing failed.
 func boolEnv(key string) (bool, bool) {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		parsed, err := strconv.ParseBool(val)

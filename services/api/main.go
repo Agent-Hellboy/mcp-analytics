@@ -1,3 +1,27 @@
+/*
+This is the API server for the MCP Analytics project.
+
+# Recent tool calls
+GET /api/events?limit=100
+
+# Total MCP activity
+GET /api/stats
+
+# Source usage statistics
+GET /api/sources
+
+# Event type statistics
+GET /api/event-types
+
+# Filter events by source/type
+GET /api/events/filter?source=mcp-server&event_type=tool.call&limit=50
+
+# Monitor API health
+GET /metrics
+
+# Health check
+GET /health
+*/
 package main
 
 import (
@@ -39,6 +63,9 @@ type apiServer struct {
 	oidcAudience string
 }
 
+// main initializes and starts the MCP Analytics API server.
+// It sets up database connections, configures authentication, initializes tracing,
+// sets up HTTP routes, and starts the server on the configured port.
 func main() {
 	port := envOr("PORT", "8080")
 	metricsPort := envOr("METRICS_PORT", "9090")
@@ -91,6 +118,9 @@ func main() {
 	mux.Handle("/stats", server.auth(http.HandlerFunc(server.handleStats)))
 	mux.Handle("/api/events", server.auth(http.HandlerFunc(server.handleEvents)))
 	mux.Handle("/api/stats", server.auth(http.HandlerFunc(server.handleStats)))
+	mux.Handle("/api/sources", server.auth(http.HandlerFunc(server.handleSources)))
+	mux.Handle("/api/event-types", server.auth(http.HandlerFunc(server.handleEventTypes)))
+	mux.Handle("/api/events/filter", server.auth(http.HandlerFunc(server.handleEventsFilter)))
 
 	shutdown, err := initTracer("mcp-analytics-api")
 	if err != nil {
@@ -118,6 +148,10 @@ func main() {
 	}
 }
 
+// initTracer initializes OpenTelemetry tracing for the service.
+// It configures OTLP HTTP exporter and sets up the tracer provider.
+// Returns a shutdown function to clean up resources and any initialization error.
+// If no OTEL_EXPORTER_OTLP_ENDPOINT is configured, returns a no-op shutdown function.
 func initTracer(serviceName string) (func(context.Context) error, error) {
 	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
 		serviceName = envName
@@ -148,6 +182,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	return provider.Shutdown, nil
 }
 
+// handleEvents handles GET /api/events requests.
+// It queries the ClickHouse database for MCP events with optional limit.
+// Returns events in descending timestamp order (newest first).
 func (s *apiServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit := clampInt(queryInt(r, "limit", 100), 1, 1000)
 
@@ -179,6 +216,9 @@ func (s *apiServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
+// handleStats handles GET /api/stats requests.
+// It queries the ClickHouse database for total event count.
+// Returns the total number of MCP events in the system.
 func (s *apiServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	query := "SELECT count() FROM " + s.dbName + ".events"
 	row := s.db.QueryRow(r.Context(), query)
@@ -191,6 +231,126 @@ func (s *apiServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events_total": count})
 }
 
+// handleSources handles GET /api/sources requests.
+// It queries the ClickHouse database for event counts grouped by source.
+// Returns a list of sources with their event counts, ordered by count descending.
+func (s *apiServer) handleSources(w http.ResponseWriter, r *http.Request) {
+	query := "SELECT source, count() as count FROM " + s.dbName + ".events GROUP BY source ORDER BY count DESC"
+	rows, err := s.db.Query(r.Context(), query)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query_failed"})
+		return
+	}
+	defer rows.Close()
+
+	type sourceStat struct {
+		Source string `json:"source"`
+		Count  uint64 `json:"count"`
+	}
+
+	var sources []sourceStat
+	for rows.Next() {
+		var stat sourceStat
+		if err := rows.Scan(&stat.Source, &stat.Count); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "scan_failed"})
+			return
+		}
+		sources = append(sources, stat)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"sources": sources})
+}
+
+// handleEventTypes handles GET /api/event-types requests.
+// It queries the ClickHouse database for event counts grouped by event type.
+// Returns a list of event types with their counts, ordered by count descending.
+func (s *apiServer) handleEventTypes(w http.ResponseWriter, r *http.Request) {
+	query := "SELECT event_type, count() as count FROM " + s.dbName + ".events GROUP BY event_type ORDER BY count DESC"
+	rows, err := s.db.Query(r.Context(), query)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query_failed"})
+		return
+	}
+	defer rows.Close()
+
+	type eventTypeStat struct {
+		EventType string `json:"event_type"`
+		Count     uint64 `json:"count"`
+	}
+
+	var eventTypes []eventTypeStat
+	for rows.Next() {
+		var stat eventTypeStat
+		if err := rows.Scan(&stat.EventType, &stat.Count); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "scan_failed"})
+			return
+		}
+		eventTypes = append(eventTypes, stat)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"event_types": eventTypes})
+}
+
+// handleEventsFilter handles GET /api/events/filter requests.
+// It queries events filtered by optional source and event_type parameters.
+// Supports query parameters: source, event_type, limit.
+// Returns filtered events ordered by timestamp descending.
+func (s *apiServer) handleEventsFilter(w http.ResponseWriter, r *http.Request) {
+	source := r.URL.Query().Get("source")
+	eventType := r.URL.Query().Get("event_type")
+	limit := clampInt(queryInt(r, "limit", 100), 1, 1000)
+
+	var conditions []string
+	var args []any
+
+	if source != "" {
+		conditions = append(conditions, "source = ?")
+		args = append(args, source)
+	}
+
+	if eventType != "" {
+		conditions = append(conditions, "event_type = ?")
+		args = append(args, eventType)
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query := "SELECT timestamp, source, event_type, payload FROM " + s.dbName + ".events " + whereClause + " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.Query(r.Context(), query, args...)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "query_failed"})
+		return
+	}
+	defer rows.Close()
+
+	events := make([]eventRow, 0, limit)
+	for rows.Next() {
+		var row eventRow
+		var payloadStr string
+		if err := rows.Scan(&row.Timestamp, &row.Source, &row.EventType, &payloadStr); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "scan_failed"})
+			return
+		}
+		if json.Valid([]byte(payloadStr)) {
+			row.Payload = json.RawMessage(payloadStr)
+		} else {
+			raw, _ := json.Marshal(payloadStr)
+			row.Payload = raw
+		}
+		events = append(events, row)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+// auth is middleware that enforces API key authentication.
+// It checks for x-api-key header or supports optional OIDC JWT validation.
+// If no API keys are configured, authentication is bypassed.
 func (s *apiServer) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(s.apiKeys) > 0 {
@@ -233,6 +393,8 @@ func (s *apiServer) auth(next http.Handler) http.Handler {
 	})
 }
 
+// audienceMatches validates if the JWT audience claim matches the expected value.
+// It handles both string and string slice audience claims as per JWT specifications.
 func audienceMatches(audClaim any, expected string) bool {
 	switch aud := audClaim.(type) {
 	case string:
@@ -247,6 +409,9 @@ func audienceMatches(audClaim any, expected string) bool {
 	return false
 }
 
+// extractBearer extracts the JWT token from an Authorization header.
+// It expects the format "Bearer <token>" and returns the token part.
+// Returns empty string if the format is invalid.
 func extractBearer(auth string) string {
 	if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
 		return strings.TrimSpace(auth[7:])
@@ -254,12 +419,16 @@ func extractBearer(auth string) string {
 	return ""
 }
 
+// writeJSON writes a JSON response with the specified status code.
+// It sets appropriate Content-Type headers and handles JSON marshaling errors.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// logRequests is middleware that logs HTTP requests.
+// It logs the HTTP method, URL path, response status, and duration.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -268,6 +437,9 @@ func logRequests(next http.Handler) http.Handler {
 	})
 }
 
+// otlpTraceOptions configures OTLP HTTP exporter options.
+// It sets up the endpoint URL and configures secure/insecure connections
+// based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
@@ -297,6 +469,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	return append(opts, otlptracehttp.WithInsecure())
 }
 
+// boolEnv parses a boolean environment variable.
+// It returns the parsed boolean value and true if parsing succeeded.
+// Returns false, false if the variable is not set or parsing failed.
 func boolEnv(key string) (bool, bool) {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		parsed, err := strconv.ParseBool(val)
@@ -307,6 +482,9 @@ func boolEnv(key string) (bool, bool) {
 	return false, false
 }
 
+// envOr returns the value of an environment variable or a fallback if not set.
+// If the environment variable is set to a non-empty value, it returns that value.
+// Otherwise, it returns the provided fallback value.
 func envOr(key, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		return val
@@ -314,6 +492,9 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// queryInt extracts an integer value from URL query parameters.
+// It parses the query parameter with the given key and returns the parsed integer.
+// If the parameter is missing or invalid, it returns the fallback value.
 func queryInt(r *http.Request, key string, fallback int) int {
 	raw := r.URL.Query().Get(key)
 	if raw == "" {
@@ -326,6 +507,9 @@ func queryInt(r *http.Request, key string, fallback int) int {
 	return value
 }
 
+// clampInt constrains an integer value within specified bounds.
+// It returns minVal if value is less than minVal, maxVal if value is greater than maxVal,
+// otherwise returns value unchanged.
 func clampInt(value, minVal, maxVal int) int {
 	if value < minVal {
 		return minVal

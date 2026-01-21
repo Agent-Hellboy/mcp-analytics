@@ -24,6 +24,9 @@ import (
 //go:embed static/*
 var staticFS embed.FS
 
+// main initializes and starts the MCP Analytics UI server.
+// It serves static web assets and provides a dynamic /config.js endpoint
+// with API configuration for the frontend. Includes tracing support.
 func main() {
 	port := envOr("PORT", "8082")
 	apiBase := envOr("API_BASE", "/api")
@@ -80,6 +83,8 @@ func main() {
 	}
 }
 
+// logRequests is middleware that logs HTTP requests.
+// It logs the HTTP method, URL path, response status, and duration.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
@@ -87,6 +92,10 @@ func logRequests(next http.Handler) http.Handler {
 	})
 }
 
+// initTracer initializes OpenTelemetry tracing for the service.
+// It configures OTLP HTTP exporter and sets up the tracer provider.
+// Returns a shutdown function to clean up resources and any initialization error.
+// If no OTEL_EXPORTER_OTLP_ENDPOINT is configured, returns a no-op shutdown function.
 func initTracer(serviceName string) (func(context.Context) error, error) {
 	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
 		serviceName = envName
@@ -117,6 +126,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	return provider.Shutdown, nil
 }
 
+// envOr returns the value of an environment variable or a fallback if not set.
+// If the environment variable is set to a non-empty value, it returns that value.
+// Otherwise, it returns the provided fallback value.
 func envOr(key, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		return val
@@ -124,6 +136,9 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// otlpTraceOptions configures OTLP HTTP exporter options.
+// It sets up the endpoint URL and configures secure/insecure connections
+// based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
@@ -153,6 +168,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	return append(opts, otlptracehttp.WithInsecure())
 }
 
+// boolEnv parses a boolean environment variable.
+// It returns the parsed boolean value and true if parsing succeeded.
+// Returns false, false if the variable is not set or parsing failed.
 func boolEnv(key string) (bool, bool) {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		parsed, err := strconv.ParseBool(val)

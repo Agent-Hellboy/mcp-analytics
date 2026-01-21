@@ -31,6 +31,10 @@ type eventPayload struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// main initializes and starts the MCP Analytics Processor service.
+// It sets up Kafka consumer connection, ClickHouse database connection,
+// configures batch processing parameters, initializes tracing,
+// and starts consuming events from Kafka to insert into ClickHouse.
 func main() {
 	brokers := strings.Split(envOr("KAFKA_BROKERS", "kafka:9092"), ",")
 	topic := envOr("KAFKA_TOPIC", "mcp.events")
@@ -168,6 +172,10 @@ func main() {
 	}
 }
 
+// initTracer initializes OpenTelemetry tracing for the service.
+// It configures OTLP HTTP exporter and sets up the tracer provider.
+// Returns a shutdown function to clean up resources and any initialization error.
+// If no OTEL_EXPORTER_OTLP_ENDPOINT is configured, returns a no-op shutdown function.
 func initTracer(serviceName string) (func(context.Context) error, error) {
 	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
 		serviceName = envName
@@ -198,6 +206,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	return provider.Shutdown, nil
 }
 
+// otlpTraceOptions configures OTLP HTTP exporter options.
+// It sets up the endpoint URL and configures secure/insecure connections
+// based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
@@ -227,6 +238,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	return append(opts, otlptracehttp.WithInsecure())
 }
 
+// insertBatch performs bulk insert of MCP events into ClickHouse.
+// It prepares a batch insert statement and executes it with the provided events.
+// Returns an error if the batch insert fails.
 func insertBatch(ctx context.Context, conn clickhouse.Conn, dbName string, batch []eventPayload) error {
 	insert, err := conn.PrepareBatch(ctx, "INSERT INTO "+dbName+".events (timestamp, source, event_type, payload)")
 	if err != nil {
@@ -246,6 +260,9 @@ func insertBatch(ctx context.Context, conn clickhouse.Conn, dbName string, batch
 	return insert.Send()
 }
 
+// envOr returns the value of an environment variable or a fallback if not set.
+// If the environment variable is set to a non-empty value, it returns that value.
+// Otherwise, it returns the provided fallback value.
 func envOr(key, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		return val
@@ -253,6 +270,9 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// boolEnv parses a boolean environment variable.
+// It returns the parsed boolean value and true if parsing succeeded.
+// Returns false, false if the variable is not set or parsing failed.
 func boolEnv(key string) (bool, bool) {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		parsed, err := strconv.ParseBool(val)
@@ -263,6 +283,9 @@ func boolEnv(key string) (bool, bool) {
 	return false, false
 }
 
+// validateDBName validates ClickHouse database name format.
+// It ensures the database name contains only valid characters and is not empty.
+// Returns an error if the database name is invalid.
 func validateDBName(name string) error {
 	if name == "" {
 		return fmt.Errorf("empty")
@@ -277,6 +300,8 @@ func validateDBName(name string) error {
 	return nil
 }
 
+// envInt parses an integer environment variable.
+// It returns the parsed integer value or the fallback if parsing fails.
 func envInt(key string, fallback int) int {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
@@ -289,6 +314,9 @@ func envInt(key string, fallback int) int {
 	return val
 }
 
+// envDuration parses a duration environment variable.
+// It parses values like "30s", "5m", "1h" and returns the parsed duration.
+// Returns the fallback value if parsing fails.
 func envDuration(key string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {

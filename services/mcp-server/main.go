@@ -40,6 +40,9 @@ type upperArgs struct {
 	Message string `json:"message" jsonschema:"message to uppercase"`
 }
 
+// main initializes and starts the MCP Server.
+// It implements MCP tools (echo, add, upper), resources, and prompts.
+// Configures analytics emission to the ingest service and starts HTTP server.
 func main() {
 	port := envOr("PORT", "8090")
 	analyticsURL := strings.TrimSpace(os.Getenv("MCP_ANALYTICS_INGEST_URL"))
@@ -116,6 +119,9 @@ func main() {
 	}
 }
 
+// echoTool implements the "echo" MCP tool.
+// It takes a message parameter and returns it unchanged.
+// Used for testing MCP protocol connectivity.
 func (s *server) echoTool(ctx context.Context, _ *mcp.CallToolRequest, args *echoArgs) (*mcp.CallToolResult, any, error) {
 	if args == nil {
 		args = &echoArgs{}
@@ -131,6 +137,9 @@ func (s *server) echoTool(ctx context.Context, _ *mcp.CallToolRequest, args *ech
 	}, nil, nil
 }
 
+// addTool implements the "add" MCP tool.
+// It takes two numbers (a and b) and returns their sum.
+// Demonstrates basic arithmetic operations via MCP.
 func (s *server) addTool(ctx context.Context, _ *mcp.CallToolRequest, args *addArgs) (*mcp.CallToolResult, any, error) {
 	if args == nil {
 		args = &addArgs{}
@@ -147,6 +156,9 @@ func (s *server) addTool(ctx context.Context, _ *mcp.CallToolRequest, args *addA
 	}, nil, nil
 }
 
+// upperTool implements the "upper" MCP tool.
+// It takes a message string and returns it in uppercase.
+// Demonstrates text transformation operations via MCP.
 func (s *server) upperTool(ctx context.Context, _ *mcp.CallToolRequest, args *upperArgs) (*mcp.CallToolResult, any, error) {
 	if args == nil {
 		args = &upperArgs{}
@@ -163,6 +175,9 @@ func (s *server) upperTool(ctx context.Context, _ *mcp.CallToolRequest, args *up
 	}, nil, nil
 }
 
+// readResource implements MCP resource reading.
+// Handles requests for "embedded:readme" resource containing server information.
+// Returns an error for unknown resources.
 func (s *server) readResource(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	if req == nil || req.Params == nil || strings.TrimSpace(req.Params.URI) == "" {
 		return nil, fmt.Errorf("invalid request")
@@ -187,6 +202,9 @@ func (s *server) readResource(ctx context.Context, req *mcp.ReadResourceRequest)
 	}, nil
 }
 
+// getPrompt implements MCP prompt retrieval.
+// Handles requests for "summarize" prompt that takes text and returns a summary.
+// Returns an error for unknown prompts.
 func (s *server) getPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 	text := ""
 	if req != nil && req.Params != nil && req.Params.Arguments != nil {
@@ -211,6 +229,9 @@ func (s *server) getPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp
 	}, nil
 }
 
+// emitAnalyticsEvent sends MCP interaction events to the analytics ingest service.
+// It asynchronously posts events to the configured ingest endpoint.
+// Used to track tool calls, resource reads, and prompt usage.
 func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, payload map[string]any) {
 	if s.analyticsURL == "" {
 		return
@@ -248,12 +269,17 @@ func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, paylo
 	_ = resp.Body.Close()
 }
 
+// writeJSON writes a JSON response with the specified status code.
+// It sets appropriate Content-Type headers and handles JSON marshaling errors.
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// envOr returns the value of an environment variable or a fallback if not set.
+// If the environment variable is set to a non-empty value, it returns that value.
+// Otherwise, it returns the provided fallback value.
 func envOr(key, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		return val
@@ -261,6 +287,10 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// initTracer initializes OpenTelemetry tracing for the service.
+// It configures OTLP HTTP exporter and sets up the tracer provider.
+// Returns a shutdown function to clean up resources and any initialization error.
+// If no OTEL_EXPORTER_OTLP_ENDPOINT is configured, returns a no-op shutdown function.
 func initTracer(serviceName string) (func(context.Context) error, error) {
 	if envName := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); envName != "" {
 		serviceName = envName
@@ -291,6 +321,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 	return provider.Shutdown, nil
 }
 
+// otlpTraceOptions configures OTLP HTTP exporter options.
+// It sets up the endpoint URL and configures secure/insecure connections
+// based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
 	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
@@ -320,6 +353,9 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	return append(opts, otlptracehttp.WithInsecure())
 }
 
+// boolEnv parses a boolean environment variable.
+// It returns the parsed boolean value and true if parsing succeeded.
+// Returns false, false if the variable is not set or parsing failed.
 func boolEnv(key string) (bool, bool) {
 	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 		parsed, err := strconv.ParseBool(val)
