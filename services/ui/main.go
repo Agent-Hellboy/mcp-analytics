@@ -78,7 +78,15 @@ func main() {
 
 	log.Printf("mcp-analytics-ui listening on :%s", port)
 	handler := otelhttp.NewHandler(logRequests(mux), "http.server")
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
+	httpServer := &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -141,7 +149,9 @@ func envOr(key, fallback string) string {
 // based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
-	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
+	if u, err := url.Parse(endpoint); err == nil {
+		// Handle URLs with schemes (http://host:port/path)
+		if u.Scheme != "" && u.Host != "" {
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 		if u.Path != "" {
 			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -156,8 +166,14 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			opts = append(opts, otlptracehttp.WithInsecure())
 		}
 		return opts
+		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
+		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		}
 	}
 
+	// Fallback: treat entire endpoint as host:port
 	opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint)}
 	if insecureSet {
 		if insecure {

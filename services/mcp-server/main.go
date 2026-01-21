@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -25,6 +26,7 @@ import (
 type server struct {
 	analyticsURL string
 	apiKey       string
+	httpClient   *http.Client // Shared HTTP client for analytics emission
 }
 
 type echoArgs struct {
@@ -48,7 +50,23 @@ func main() {
 	analyticsURL := strings.TrimSpace(os.Getenv("MCP_ANALYTICS_INGEST_URL"))
 	apiKey := strings.TrimSpace(os.Getenv("MCP_ANALYTICS_API_KEY"))
 
-	srv := &server{analyticsURL: analyticsURL, apiKey: apiKey}
+	// Create shared HTTP client for analytics emission with connection pooling
+	analyticsTransport := otelhttp.NewTransport(&http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	})
+
+	sharedClient := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: analyticsTransport,
+	}
+
+	srv := &server{
+		analyticsURL: analyticsURL,
+		apiKey:       apiKey,
+		httpClient:   sharedClient,
+	}
 
 	mcpServer := mcp.NewServer(&mcp.Implementation{
 		Name:    "mcp-example-server",
@@ -114,7 +132,15 @@ func main() {
 
 	log.Printf("mcp-example-server listening on :%s", port)
 	otelHandler := otelhttp.NewHandler(mux, "http.server")
-	if err := http.ListenAndServe(":"+port, otelHandler); err != nil {
+	httpServer := &http.Server{
+		Addr:              ":" + port,
+		Handler:           otelHandler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -213,8 +239,8 @@ func (s *server) getPrompt(ctx context.Context, req *mcp.GetPromptRequest) (*mcp
 		}
 	}
 	summary := text
-	if len(summary) > 80 {
-		summary = summary[:80] + "..."
+	if utf8.RuneCountInString(summary) > 80 {
+		summary = string([]rune(summary)[:80]) + "..."
 	}
 
 	s.emitAnalyticsEvent(ctx, "prompt.render", map[string]any{"name": "summarize"})
@@ -258,11 +284,7 @@ func (s *server) emitAnalyticsEvent(ctx context.Context, eventType string, paylo
 		req.Header.Set("x-api-key", s.apiKey)
 	}
 
-	client := &http.Client{
-		Timeout:   3 * time.Second,
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
-	}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return
 	}
@@ -326,7 +348,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 // based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
-	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
+	if u, err := url.Parse(endpoint); err == nil {
+		// Handle URLs with schemes (http://host:port/path)
+		if u.Scheme != "" && u.Host != "" {
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 		if u.Path != "" {
 			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -341,8 +365,14 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			opts = append(opts, otlptracehttp.WithInsecure())
 		}
 		return opts
+		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
+		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		}
 	}
 
+	// Fallback: treat entire endpoint as host:port
 	opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint)}
 	if insecureSet {
 		if insecure {

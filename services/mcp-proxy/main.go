@@ -48,6 +48,7 @@ type proxyServer struct {
 	source       string
 	eventType    string
 	stripPrefix  string
+	httpClient   *http.Client // Shared HTTP client for analytics emission
 }
 
 type statusRecorder struct {
@@ -82,6 +83,18 @@ func main() {
 		http.Error(w, "upstream error", http.StatusBadGateway)
 	}
 
+	// Create shared HTTP client for analytics emission with connection pooling
+	analyticsTransport := otelhttp.NewTransport(&http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	})
+
+	sharedClient := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: analyticsTransport,
+	}
+
 	srv := &proxyServer{
 		proxy:        proxy,
 		analyticsURL: analyticsURL,
@@ -89,6 +102,7 @@ func main() {
 		source:       source,
 		eventType:    eventType,
 		stripPrefix:  stripPrefix,
+		httpClient:   sharedClient,
 	}
 
 	mux := http.NewServeMux()
@@ -111,7 +125,15 @@ func main() {
 
 	log.Printf("mcp-proxy listening on :%s -> %s", port, upstream)
 	handler := otelhttp.NewHandler(mux, "http.server")
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
+	httpServer := &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -180,11 +202,7 @@ func (s *proxyServer) emit(ctx context.Context, event analyticsEvent) {
 		req.Header.Set("x-api-key", s.apiKey)
 	}
 
-	client := &http.Client{
-		Timeout:   3 * time.Second,
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
-	}
-	resp, err := client.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return
 	}
@@ -329,7 +347,9 @@ func initTracer(serviceName string) (func(context.Context) error, error) {
 // based on whether the endpoint uses HTTPS or HTTP.
 func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 	insecure, insecureSet := boolEnv("OTEL_EXPORTER_OTLP_INSECURE")
-	if u, err := url.Parse(endpoint); err == nil && u.Scheme != "" {
+	if u, err := url.Parse(endpoint); err == nil {
+		// Handle URLs with schemes (http://host:port/path)
+		if u.Scheme != "" && u.Host != "" {
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(u.Host)}
 		if u.Path != "" {
 			opts = append(opts, otlptracehttp.WithURLPath(u.Path))
@@ -344,8 +364,14 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 			opts = append(opts, otlptracehttp.WithInsecure())
 		}
 		return opts
+		// Handle scheme-less endpoints (host:port) that get parsed incorrectly
+		// url.Parse("collector:4318") treats "collector" as scheme, leaving Host empty
+		if u.Scheme != "" && u.Host == "" {
+			// This is a scheme-less endpoint, fall through to treat as host:port
+		}
 	}
 
+	// Fallback: treat entire endpoint as host:port
 	opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint)}
 	if insecureSet {
 		if insecure {

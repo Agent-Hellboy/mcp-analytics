@@ -5,12 +5,12 @@ go 1.24
 require (
 	github.com/MicahParks/keyfunc v1.9.0
 	github.com/golang-jwt/jwt/v4 v4.5.2
-	github.com/prometheus/client_golang v1.18.0
-	github.com/segmentio/kafka-go v0.4.47
+	github.com/prometheus/client_golang v1.23.2
+	github.com/segmentio/kafka-go v0.4.50
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0
-	go.opentelemetry.io/otel v1.24.0
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.24.0
-	go.opentelemetry.io/otel/sdk v1.24.0
+	go.opentelemetry.io/otel v1.38.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.38.0
+	go.opentelemetry.io/otel/sdk v1.38.0
 )
 
 require (

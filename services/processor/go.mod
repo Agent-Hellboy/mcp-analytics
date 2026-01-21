@@ -3,12 +3,12 @@ module mcp-analytics-processor
 go 1.24
 
 require (
-	github.com/ClickHouse/clickhouse-go/v2 v2.21.0
-	github.com/prometheus/client_golang v1.18.0
-	github.com/segmentio/kafka-go v0.4.47
-	go.opentelemetry.io/otel v1.24.0
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.24.0
-	go.opentelemetry.io/otel/sdk v1.24.0
+	github.com/ClickHouse/clickhouse-go/v2 v2.40.3
+	github.com/prometheus/client_golang v1.23.2
+	github.com/segmentio/kafka-go v0.4.50
+	go.opentelemetry.io/otel v1.38.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.38.0
+	go.opentelemetry.io/otel/sdk v1.38.0
 )
 
 require (

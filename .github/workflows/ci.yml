@@ -85,8 +85,20 @@ jobs:
       - name: Validate manifests
         run: |
           set -euo pipefail
-          curl -sSL -o /tmp/kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
-          # Note: Checksum verification for kubeconform would be added here if available
-          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          KUBECONFORM_VERSION="v0.6.7"
+          KUBECONFORM_BINARY="kubeconform-linux-amd64.tar.gz"
+
+          echo "🔒 Downloading kubeconform ${KUBECONFORM_VERSION} with checksum verification"
+          curl -sSL -o /tmp/${KUBECONFORM_BINARY} https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/${KUBECONFORM_BINARY}
+          curl -sSL -o /tmp/CHECKSUMS https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/CHECKSUMS
+
+          # Verify checksum
+          if ! grep "${KUBECONFORM_BINARY}" /tmp/CHECKSUMS | sha256sum --check --status; then
+            echo "❌ Checksum verification failed for kubeconform!"
+            exit 1
+          fi
+
+          echo "✅ Checksum verification passed"
+          tar -xzf /tmp/${KUBECONFORM_BINARY} -C /tmp kubeconform
           chmod +x /tmp/kubeconform
           /tmp/kubeconform -kubernetes-version 1.34.0 -summary -strict k8s/*.yaml
