@@ -398,7 +398,7 @@ func otlpTraceOptions(endpoint string) []otlptracehttp.Option {
 		}
 		return opts
 	}
-	return append(opts, otlptracehttp.WithInsecure())
+	return opts
 }
 
 // boolEnv parses a boolean environment variable.

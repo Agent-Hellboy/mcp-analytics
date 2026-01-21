@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -108,7 +110,8 @@ func main() {
 	}
 
 	log.Printf("mcp-analytics-processor started")
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	tracer := otel.Tracer("mcp-analytics-processor")
 
 	ticker := time.NewTicker(flushInterval)
@@ -165,6 +168,10 @@ func main() {
 			flush()
 		case err := <-errChan:
 			log.Printf("read failed: %v", err)
+		case <-ctx.Done():
+			log.Printf("shutdown signal received, flushing final batch...")
+			flush()
+			return
 		case msg := <-msgChan:
 			_, span := tracer.Start(ctx, "kafka.consume")
 			span.SetAttributes(

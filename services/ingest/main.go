@@ -140,9 +140,6 @@ func main() {
 	_ = httpServer.Shutdown(shutdownCtx)
 	_ = metricsServer.Shutdown(shutdownCtx)
 	_ = writer.Close()
-	if shutdown != nil {
-		_ = shutdown(shutdownCtx)
-	}
 }
 
 const maxBodySize = 1 << 20 // 1MB
