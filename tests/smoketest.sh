@@ -54,7 +54,7 @@ kubectl -n "$NAMESPACE" rollout restart deployment/mcp-example-sidecar
 
 kubectl -n "$NAMESPACE" rollout status statefulset/clickhouse --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/zookeeper --timeout=180s
-kubectl -n "$NAMESPACE" rollout status deployment/kafka --timeout=180s
+kubectl -n "$NAMESPACE" rollout status statefulset/kafka --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/mcp-analytics-ingest --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/mcp-analytics-processor --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/mcp-analytics-api --timeout=180s
@@ -64,7 +64,7 @@ kubectl -n "$NAMESPACE" rollout status deployment/mcp-example-server --timeout=1
 kubectl -n "$NAMESPACE" rollout status deployment/mcp-example-sidecar --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/otel-collector --timeout=180s
 kubectl -n "$NAMESPACE" rollout status statefulset/tempo --timeout=180s
-kubectl -n "$NAMESPACE" rollout status deployment/loki --timeout="$LOKI_ROLLOUT_TIMEOUT"
+kubectl -n "$NAMESPACE" rollout status statefulset/loki --timeout="$LOKI_ROLLOUT_TIMEOUT"
 kubectl -n "$NAMESPACE" rollout status daemonset/promtail --timeout=180s
 
 PIDS=()
